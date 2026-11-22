@@ -156,22 +156,6 @@ NOTE: lf has also been tested with -fsanitize=thread and -fsanitize=address, and
 ```
 ---
 
-## File Finder Comparative Benchmark
-
-### Baseline find (GNU findutils) version 4.11.0
-
-```
-find /home/bill
-find: ‘/home/bill/.config/google-chrome/BrowserMetrics’: Permission denied
-0.36user 0.48system 0:00.85elapsed 99%CPU (0avgtext+0avgdata 35500maxresident)k
-0inputs+0outputs (0major+11893minor)pagefaults 0swaps
-found 511296 files
-Notice that lf is the fastest, and uses the least memory. It also has the fewest page faults. fd is faster than find, but uses more memory and has more page faults. find is the slowest, and uses the most memory and has the most page faults.
-
-NOTE: find counts the root directory as a file, while fd and lf do not. This
-accounts for the one-file difference in the file counts. This is not necessarily
-an error. Just subtract 1 from the find count to get an accurate result.
-
 ## To Build lf
 
 Change to the source directory, lf/src, and:
