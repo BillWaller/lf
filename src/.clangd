@@ -1,0 +1,6 @@
+CompileFlags:
+  Add: [-std=c23]
+    [
+      "-I/usr/include",
+      "-I/lib64/clang/22/include"
+    ]

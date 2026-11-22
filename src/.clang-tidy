@@ -1,0 +1,29 @@
+# Enable critical bugs, security practices, and readability checks while 
+# excluding C++ specific suites
+Checks: >
+  -*,
+  bugprone-*,
+  cert-*,
+  concurrency-*,
+  misc-*,
+  performance-*,
+  readability-*,
+  -bugprone-forwarding-reference-overload,
+  -misc-definitions-in-headers,
+  -readability-const-return-type,
+  -readability-convert-member-functions-to-static,
+  -readability-redundant-control-flow
+
+# Turn warnings into compilation-stopping errors if you want strict enforcement
+WarningsAsErrors: 'bugprone-*,cert-*'
+
+# Ensure internal headers are parsed correctly, ignoring external libraries
+HeaderFilterRegex: '^(src|include)/.*'
+AnalyzeTemporaryDtors: false
+
+# Crucial C23 compiler configuration flags passed to Clang's parser
+ExtraArgs:
+  - '-std=c23'
+  - '-Wall'
+  - '-Wextra'
+  - '-Wpedantic'

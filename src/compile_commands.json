@@ -1,0 +1,8 @@
+[
+{
+  "directory": "/usr/local/src/lf/src/build",
+  "command": "/usr/bin/cc   -O3 -DNDEBUG -std=gnu2x -march=native -Wall -Wextra -Wshadow -Wpointer-arith -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -Werror -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable -Wno-unused-result -Wno-unused-but-set-variable -Wno-unused-label -Wno-unused-value -Wno-unused-const-variable -Wno-unused-macros -O3 -s -fPIC -o CMakeFiles/lf.dir/lf.c.o -c /usr/local/src/lf/src/lf.c",
+  "file": "/usr/local/src/lf/src/lf.c",
+  "output": "CMakeFiles/lf.dir/lf.c.o"
+}
+]
