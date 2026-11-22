@@ -25,9 +25,9 @@ Below is the actual output of timings for find, fd, and lf on a directory with
 
 # File Finder Benchmarks - November 22, 2026
 
-find (GNU findutils) version 4.11.0
-fd                   version 10.5.0
-lf                   version 0.3.3
+* find (GNU findutils) version 4.11.0
+* fd                   version 10.5.0
+* lf                   version 0.3.3
 
 Summary:
 
