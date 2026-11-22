@@ -108,6 +108,11 @@ expected 511295, found 511295 files
 ```
 ---
 
+Note: Both find and lf indicate an error on
+/home/bill/.config/google-chrome/BrowserMetrics, but fd does not.
+
+fd ignores the error, while find and lf report the error to stderr so that it does not get mixed in with normal output on stdout. The error is a permission denied error, which means that the user running the command does not have permission to access the directory. This is helpful information for the user, as it indicates that there may be files in that directory that are not being counted.
+
 ## lf Quality Assurance
 
 NOTE: lf has also been tested with -fsanitize=thread and -fsanitize=address, and no errors were found.
