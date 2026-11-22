@@ -203,6 +203,25 @@ providing a variety of options for customizing the search criteria.
 
     Print program version
 
+# OUTPUT
+
+* Errors: lf prints error messages to standard error. If you want to redirect error messages to a file, you can use the following command:
+
+    lf -H 2>error.log
+
+* Standard output: lf prints the list of files that match the specified criteria to standard output. If you want to redirect the output to a file, you can use the following command:
+
+    lf -H >output.log
+
+* Format: lf prints the list of files in a simple format, one file per line. If
+  the user provides a full path to the base path directory, lf will print the
+full path to each file. If no base path is provided, lf prints files in the
+current directory without the leading "./".
+
+* Identifying directories: lf indicates directories by appending "/" to the end
+  of the directory name. For example, if the directory "mydir" is found, lf will print "mydir/".
+
+
 # USAGE TIPS
 
 A space after short options is optional. For example, -s10M and -s 10M are both valid.
@@ -239,6 +258,8 @@ executes a command with those items as arguments. xargs is a powerful and highly
 optimized tool for processing large numbers of files. xargs may also be used
 with find and lf. In fact, we found that passing the output of find through xargs
 was significantly faster than using the exec option of find.
+
+Hint:  You may want to use the -Tn option to limit the number of threads when using lf in a pipeline, thus reserving threads for the downstream commands.
 
 If you are replacing find with lf in a script, you should consider that lf omits
 hidden files and directories by default. Use the "-H" option to include hidden files and directories. Both lf and fd omit the top-level base path from the output, don't prefix file paths, and indicate directories by appending "/".
