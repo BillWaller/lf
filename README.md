@@ -21,7 +21,7 @@ lf is designed to be modular and extensible, so that it can be easily integrated
 ## File Finder Comparative Benchmark
 
 Below is the actual output of timings for find, fd, and lf on a directory with
-469775 files. The directory is /home/bill, and it contains a mix of files and directories. The timings were done on a Linux system with a 16 x Intel® Xeon® E5-2670 @ 2.6GHz, 32GB of RAM, and an NVMe SSD.
+511295 files. The directory is /home/bill, and it contains a mix of files and directories. The timings were done on a Linux system with a 16 x Intel® Xeon® E5-2670 @ 2.6GHz, 32GB of RAM, and an NVMe SSD.
 
 # File Finder Benchmarks - November 22, 2026
 
