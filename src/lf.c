@@ -52,9 +52,9 @@ struct tm tm_info;
 const char *argp_program_version = LF_VERSION;
 const char *argp_program_bug_address = "billxwaller@gmail.com";
 const char doc[] =
-    _("lf list files\nIf specified, DIRECTORY is the top-level\n directory to "
-      "search. REGULAR_EXPRESSION is a properly\nformatted regular expression "
-      "for which matching files\nwill be listed.");
+    _("lf list files\nIf specified, DIRECTORY is the top-level directory to "
+      "search. REGULAR_EXPRESSION is a properly formatted regular expression "
+      "for which matching files will be listed.");
 bool is_hidden(const char *);
 bool is_dirsys(const char *);
 static char args_doc[] = "[DIRECTORY] [REGULAR_EXPRESSION]";

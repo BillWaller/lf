@@ -86,7 +86,6 @@ help:
 	@echo "  install_man   - Install Manual Pages"
 	@echo "  clean         - Remove build artifacts"
 	@echo "  uninstall     - Remove installed binaries and libraries"
-	@echo "  manifest      - Display manifest of installed files"
 	@echo "  valgrind      - run valgrind on selected executable"
 	@echo "  helgrind      - run helgrind on selected executable"
 
@@ -122,7 +121,7 @@ lf.1.gz:	../docs/lf.md
 
 clean:
 	rm -rf $(BINEXES) $(CFLOW_OUTPUT) .user_id .group_id core scan-build* \
-	manifest.txt manifest.ls perf.* x xx* *.[aeos] *.diff *.so \
+	perf.* x xx* *.[aeos] *.diff *.so \
 	*.cflow *.gc.. *.out *.1 *.1.gz CMakeFiles cmake_install.cmake \
 	   	CMakeCache.txt CMakefile CMAKE_BUILD_TYPE=Debug gdb.log
 
@@ -145,15 +144,8 @@ valgrind: lf
 		./lf -H
 
 install:
-	install -CDp	lf
+	install -CDp	lf    -t $(INSTALL_BIN_DIR)
 	install -CDp lf.1.gz	-t $(INSTALL_MAN_DIR)
-	./manifest.sh
-ifeq ($(DISPLAY_MANIFEST), 1)
-	cat manifest.txt
-endif
-
-manifest:
-	cat manifest.txt
 
 install_man:
 	install -CDp lf.1.gz	-t $(INSTALL_MAN_DIR)
