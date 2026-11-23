@@ -142,6 +142,12 @@ if [ "$target" = "" ]; then
     target=lf
 fi
 target=$(cut -d. -f1 <<<"$target")
+file ../"$target" | grep "with debug_info" >/dev/null 2>&1
+if [ "$?" -ne 0 ]; then
+    echo "Error: $target does not have debug info."
+    echo "Build with -DCMAKE_BUILD_TYPE=Debug"
+    exit 1
+fi
 if [ "$enumber" != "" ]; then
     newbase=$target"_"$enumber
 fi
@@ -162,7 +168,7 @@ TMP_INTERNAL=h_internal.tmp
 grep -v -e "vg_replace" -e "hg_intercepts" -e "Locks held:" helgrind.out |
     sed -n '6,$p' |
     sed '/^$/d
-    s/^..........//  
+    s/^==[0-9]*== //  
     /^---Thread.*/,/^--*$/d
     s/^   by 0x//
     s/^----------*$//

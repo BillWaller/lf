@@ -6,8 +6,8 @@
 # billxwaller@gmail.com
 # @date 2026-06-10
 #
-BUILD_TYPE=Debug
 BUILD_TYPE=Release
+BUILD_TYPE=Debug
 # Uncomment the following line to enable thread sanitizer
 # Only use for debugging as it will slow down the build and execution
 # CC_EXTRA = -fsanitize=thread

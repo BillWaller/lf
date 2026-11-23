@@ -921,6 +921,12 @@ void push_root_node(GlobalContext *__G, dev_t dev, ino_t ino) {
     mpmc_enqueue(__G, &root_node, __G->base_path, strlen(__G->base_path));
     return;
 }
+/** @brief Destroy the queue arena and free associated resources.
+    @param lf A pointer to the GlobalContext struct containing the queue arena.
+    @details This function unmaps the memory allocated for the queue arena using
+   munmap. It is called during cleanup to release resources associated with the
+   queue arena after the file search operation is complete.
+   */
 void global_arena_destroy(GlobalContext *__G) {
     if (!__G->arena)
         return;
@@ -991,6 +997,20 @@ bool append_output_buffer(GlobalContext *__G, OutputBuffer *output_buffer, const
 // ----------------------------------------------------------------------
 // VYUKOV MPMC QUEUE
 // ----------------------------------------------------------------------
+/** @brief Enqueue a node into the MPMC queue.
+    @param lf A pointer to the GlobalContext struct containing the queue.
+    @param node A pointer to the QueueNode to be enqueued.
+    @param path The path string associated with the node.
+    @param len The length of the path string.
+    @return true if the enqueue operation was successful, false if the queue is
+   full or if there was contention.
+    @details This function implements a multi-producer, multi-consumer (MPMC)
+   queue using Vyukov's algorithm. It attempts to enqueue a node into the queue,
+   checking for available slots and using atomic operations to ensure thread-safe
+   access. If the queue is full or if there is contention, it returns false,
+   indicating that the caller should handle the situation (e.g., by falling back
+   to local stack or single enqueue).
+   */
 bool mpmc_enqueue(GlobalContext *__G, QueueNode *node, const char *path, size_t len) {
     size_t pos = atomic_load_explicit(&__G->enqueue_pos, memory_order_relaxed);
     int spin_count = 0;
@@ -1030,6 +1050,18 @@ bool mpmc_enqueue(GlobalContext *__G, QueueNode *node, const char *path, size_t 
     atomic_thread_fence(memory_order_release);
     return true;
 }
+/** @brief Bulk enqueue multiple nodes into the MPMC queue.
+    @param lf A pointer to the GlobalContext struct containing the queue.
+    @param tl A pointer to the ThreadLocal struct containing the nodes to enqueue.
+    @return true if the bulk enqueue was successful, false if the queue is full.
+    @details This function attempts to enqueue multiple nodes from a thread-local
+   buffer into a multi-producer, multi-consumer (MPMC) queue. It checks for
+   available slots in the queue and uses atomic operations to reserve space for
+   the nodes. If successful, it copies the nodes and their associated path data
+   into the global queue and updates the sequence numbers accordingly. If the
+   queue is full, it returns false, indicating that the caller should fall back
+   to local stack or single enqueue.
+   */
 bool mpmc_bulk_enqueue(GlobalContext *__G, ThreadLocal *__tl) {
     if (__tl->stage_idx == 0)
         return true;
@@ -1113,6 +1145,19 @@ bool mpmc_bulk_enqueue(GlobalContext *__G, ThreadLocal *__tl) {
     __tl->path_data[0] = '\0';
     return true;
 }
+/** @brief Dequeue a node from the MPMC queue.
+    @param lf A pointer to the GlobalContext struct containing the queue.
+    @param dequeue_pos A pointer to a uint_fast32_t variable where the dequeued
+   position will be stored.
+    @return true if the dequeue operation was successful, false if the queue is
+   empty or if a shutdown signal was received.
+    @details This function implements a multi-producer, multi-consumer (MPMC)
+   queue using Vyukov's algorithm. It attempts to dequeue a node from the queue,
+   checking for available slots and using atomic operations to ensure thread-safe
+   access. If the queue is empty or if a shutdown signal is received, it returns
+   false, indicating that the caller should handle the situation (e.g., by
+   terminating the thread).
+   */
 bool mpmc_dequeue(GlobalContext *__G, uint_fast32_t *dequeue_pos) {
     alignas(CACHE_LINE_SIZE) uint_fast32_t pos = atomic_load_explicit(&__G->dequeue_pos, memory_order_relaxed);
     int spin_count = 0;
@@ -1178,6 +1223,16 @@ static inline void mpmc_release_slot(GlobalContext *__G, uint_fast32_t pos) {
     // mpmc_release_slot(__G, pos);
 }
 // ----------------------------------------------------------------------
+/** @brief Worker thread function for processing directory traversal tasks.
+    @param arg A pointer to the GlobalContext struct containing the search settings.
+    @return NULL upon completion.
+    @details This function is executed by each worker thread. It continuously
+   dequeues directory nodes from the MPMC queue, reconstructs their paths, and
+   invokes the finder function to process the directories. The worker maintains
+   its own thread-local storage for managing stage nodes and path data. It also
+   handles logging and output buffering. The thread exits when there are no more
+   tasks to process or when a shutdown signal is received.
+   */
 void *worker(void *arg) {
     GlobalContext *__G = (GlobalContext *)arg;
     ThreadLocal __tl;
@@ -1272,6 +1327,16 @@ void *worker(void *arg) {
 // ----------------------------------------------------------------------
 // FINDER
 // ----------------------------------------------------------------------
+/** @brief Process a directory by reading its entries and enqueueing subdirectories.
+    @param lf A pointer to the GlobalContext struct containing the search settings.
+    @param tl A pointer to the ThreadLocal struct containing thread-specific data.
+    @return NULL upon completion.
+    @details This function opens a directory specified in the ThreadLocal struct,
+   reads its entries using getdents64, and processes each entry. It filters out
+   certain entries (e.g., "." and ".."), retrieves metadata for files and
+   directories, and enqueues subdirectories into the MPMC queue for further
+   processing. The function also handles logging and error reporting as needed.
+   */
 void *finder(GlobalContext *__G, ThreadLocal *__tl) {
     long nread;
     struct stat sb = {};
@@ -1510,6 +1575,14 @@ void *finder(GlobalContext *__G, ThreadLocal *__tl) {
     }
     return NULL;
 }
+/** @brief Build the full path for a file or directory entry.
+    @param tl A pointer to the ThreadLocal struct containing thread-specific data.
+    @param file_name The name of the file or directory entry.
+    @details This function constructs the full path for a given file or directory
+   entry by appending the entry's name to the parent path stored in the
+   ThreadLocal struct. It updates the path length and ensures that the resulting
+   path is null-terminated.
+   */
 void build_path(ThreadLocal *__tl, char *file_name) {
     __tl->path_len = __tl->parent_path_len;
     __tl->path[__tl->path_len++] = '/';
@@ -1518,6 +1591,15 @@ void build_path(ThreadLocal *__tl, char *file_name) {
     __tl->path_len += __tl->d_name_len;
     __tl->path[__tl->path_len] = '\0';
 }
+/** @brief Print the file or directory entry if it matches the specified criteria.
+    @param lf A pointer to the GlobalContext struct containing the search settings.
+    @param tl A pointer to the ThreadLocal struct containing thread-specific data.
+    @return true if the file or directory entry was printed, false otherwise.
+    @details This function checks if a given file or directory entry matches the
+   specified criteria (e.g., type, regex, user ownership, permissions, etc.).
+   If it matches, it appends the entry's path to the output buffer for printing.
+   The function also updates the file count and handles logging as needed.
+   */
 int print_file(GlobalContext *__G, ThreadLocal *__tl) {
     while (1) {
         if (__G->suppress_types & lf_type_mask[__tl->effective_type])
@@ -1634,6 +1716,17 @@ static const char DIV100_TABLE[] = "0001020304050607080910111213141516171819"
         while (*s)             \
             *p++ = *s++;       \
     } while (0)
+/** @brief Write a 3-digit unsigned integer to a buffer.
+    @ingroup logging
+    @param p Pointer to the buffer where the integer will be written.
+    @param val The unsigned integer value to write (0-999).
+    @return Pointer to the next position in the buffer after writing the integer.
+    @details This function writes a 3-digit unsigned integer to a provided buffer
+   using a precomputed lookup table for efficiency. It handles values from 0 to
+   999, ensuring that the output is always three characters long, with leading
+   zeros if necessary. The function returns a pointer to the next position in
+   the buffer after writing the integer.
+   */
 static inline char *write_uint3d(char *p, long val) {
     long hundreds = val / 100;
     long remainder = val % 100;
@@ -1642,6 +1735,17 @@ static inline char *write_uint3d(char *p, long val) {
     *p++ = DIV100_TABLE[remainder * 2 + 1];
     return p;
 }
+/** @brief Write a 2-digit unsigned integer to a buffer.
+    @ingroup logging
+    @param p Pointer to the buffer where the integer will be written.
+    @param val The unsigned integer value to write (0-99).
+    @return Pointer to the next position in the buffer after writing the integer.
+    @details This function writes a 2-digit unsigned integer to a provided buffer
+   using a precomputed lookup table for efficiency. It handles values from 0 to
+   99, ensuring that the output is always two characters long, with leading zeros
+   if necessary. The function returns a pointer to the next position in the
+   buffer after writing the integer.
+   */
 static inline char *write_uint2d(char *p, long val) {
     *p++ = DIV100_TABLE[val * 2];
     *p++ = DIV100_TABLE[val * 2 + 1];

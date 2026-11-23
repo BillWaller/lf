@@ -156,7 +156,11 @@ NOTE: lf has also been tested with -fsanitize=thread and -fsanitize=address, and
 ```
 ---
 
-## To Build lf
+## Building lf
+
+---
+
+Initial build:
 
 Change to the source directory, lf/src, and:
 
@@ -178,17 +182,26 @@ cmake --build build
 sudo cmake --install build
 ```
 
-- To change the installation path (the PREFIX variable from your Makefile), swap step 1 with:
+---
+
+- To install lf in a custom path (the PREFIX variable from your Makefile), swap step 1 with:
 
 ```bash
-    cmake -B build -DCMAKE_INSTALL_PREFIX=/your/custom/path.
+    cmake -B build -DCMAKE_INSTALL_PREFIX=/your/custom/path \
+          -DCMAKE_BUILD_TYPE=Release
 ```
+
+---
 
 - To build a Debug variant, toggle the build flag: 
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Debug
 ```
+
+---
+
+Before running valgrind or helgrind, you must build the Debug variant of lf. This is because valgrind and helgrind require debug symbols to be present in the binary in order to provide meaningful output. If you try to run valgrind or helgrind on a Release build, you will get a lot of warnings and errors that are not relevant to your code.
 
 - To run valgrind:
 
@@ -202,3 +215,54 @@ cmake --build build --target valgrind
 cmake --build build --target helgrind
 ```
 
+After running helgrind, you will find helgrind.out in src/helgrind. Because the helgrind report is notoriously confusing and difficult to read, you can change to the src/helgrind directory and run the following command to get a more concise and readable report:
+
+```bash
+    ./fmt_helgrind.sh
+```
+
+This will create a file named helgrind_s1.out in the src/helgrind directory and make backup copies of lf.c and lf.h as lf_1.c and lf_1.h respectively. The numbers appended to the files increment sequentially for each iteration of fmt_helgrind.sh. This will be helpful in the event that your modifications have broken lf and you need to revert to a previous iteration.
+
+```
+Helgrind, a thread error detector
+Copyright (C) 2007-2026, and GNU GPL'd, by OpenWorks LLP et al.
+Using Valgrind-3.29.0.GIT and LibVEX; rerun with -h for copyright info
+Command: ./lf -H
+2026-11-23T16:32:24Z Condensed Format by Bill Waller
+
+cntxt errors action size  at_addr by_addr fn                          thread  line
+----- ------ ------ ---- -------- ------- ------------------------------ --- -----
+    1      7 write     8  4AB22C8  4075EE mpmc_dequeue                     2  1200
+    1        read                  40745E mpmc_dequeue                    16  1155
+      ------
+           7 total errors
+
+line_no  errors Conflicts
+-------  ------ -------------------------------------------------
+   1155       7   1200
+   1200       7   1155
+         ------ 
+total        14 (2 x 7) 
+```
+
+---
+
+Note: You can build lf with a simple compile command such as:
+
+```bash
+clang -std=c23 lf.c -o lf
+```
+
+or
+
+```bash
+cc -std=gnu2y lf.c -o lf
+```
+
+However, you wont get the benefits of the CMake build system, such as easy configuration, dependency management, cross-platform support, integrated valgrind and helgrind actions, and language support.
+
+The CMake build creates a file in the lf/src directory named compile_commands.json which is used by many IDEs and code editors to provide code completion, navigation, and other features. And, you can also use the CMake build system to generate project files for your IDE or code editor, so that you can use its built-in build and run features.
+
+Therefore, it is recommended to use CMake for building lf, at least initially.
+Once the compile_commands.json file is generated, you can use your favorite IDE
+or code editor to build and run lf, and to debug and profile it. 
