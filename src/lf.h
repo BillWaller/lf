@@ -306,14 +306,23 @@ typedef enum {
 // ---------------------------------------------------------------
 #define NO_PARENT UINT32_MAX
 typedef struct {
-    uint_fast32_t parent_idx;           //   4
-    uint_fast32_t path_offset;          //   4
-    uint_fast32_t path_len;             //   4
-    uint_fast32_t child_dirs_remaining; //   4
-    uint_fast32_t depth;                //   4
-    dev_t dev;                          //   8
-    ino_t ino;                          //   8
-} QueueNode;                            //  36 bytes total
+    uint_fast32_t parent_idx;                                           //   4
+    uint_fast32_t path_offset;                                          //   4
+    uint_fast32_t path_len;                                             //   4
+    alignas(CACHE_LINE_SIZE) atomic_uint_fast32_t child_dirs_remaining; //   4
+    uint_fast32_t depth;                                                //   4
+    dev_t dev;                                                          //   8
+    ino_t ino;                                                          //   8
+} QueueNode;                                                            //  36 bytes total
+typedef struct {
+    uint_fast32_t parent_idx;                  //   4
+    uint_fast32_t path_offset;                 //   4
+    uint_fast32_t path_len;                    //   4
+    atomic_uint_fast32_t child_dirs_remaining; //   4
+    uint_fast32_t depth;                       //   4
+    dev_t dev;                                 //   8
+    ino_t ino;                                 //   8
+} LocalQueueNode;                              //  36 bytes total
 // ---------------------------------------------------------------
 // OUTPUT BUFFER
 // ---------------------------------------------------------------
@@ -479,13 +488,14 @@ void debug_out(GlobalContext *__G, int, char **);
 bool init_lf(GlobalContext *__G, int, char **);
 int sort_lf_output(GlobalContext *__G, int, char **);
 void *worker(void *arg);
-void *finder(GlobalContext *__G, ThreadLocal *tl);
-int print_file(GlobalContext *__G, ThreadLocal *tl);
-void flush_output_buffer(GlobalContext *, OutputBuffer *);
-bool append_output_buffer(GlobalContext *__G, OutputBuffer *output, const char *path, size_t path_len, bool append_slash);
+void *finder(GlobalContext *__G, ThreadLocal *__tl);
+int print_file(GlobalContext *__G, ThreadLocal *__tl);
+void flush_output_buffer(GlobalContext *, ThreadLocal *__tl);
+bool append_output_buffer(GlobalContext *__G, ThreadLocal *__tl, const char *path, size_t path_len, bool append_slash);
 void finalize_dir_node(GlobalContext *__G, size_t node_offset);
 bool global_arena_create(GlobalContext *__G);
 void global_arena_destroy(GlobalContext *__G);
+static inline void release_directory_chain(GlobalContext *__G, uint_fast32_t q_pos);
 void push_root_node(GlobalContext *__G, dev_t dev, ino_t ino);
 bool mpmc_enqueue(GlobalContext *__G, QueueNode *node, const char *path, size_t len);
 bool mpmc_enqueue_staged(GlobalContext *, ThreadLocal *__tl);
@@ -493,7 +503,7 @@ bool mpmc_bulk_enqueue(GlobalContext *__G, ThreadLocal *__tl);
 bool mpmc_dequeue(GlobalContext *__G, uint_fast32_t *dequeue_pos);
 char *path_data_init(GlobalContext *__G, LogCtx *log_ctx);
 void path_data_destroy(GlobalContext *__G);
-size_t flush_ch(GlobalContext *__G, ThreadLocal *tl);
+size_t flush_ch(GlobalContext *__G, ThreadLocal *__tl);
 void iso8601_timestamp(GlobalContext *__G, LogCtx *log_ctx);
 bool parse_local_timestamp(const char *s, time_t *out);
 char *format_local_timestamp(time_t t, char *buf, size_t n);

@@ -21,7 +21,10 @@ lf is designed to be modular and extensible, so that it can be easily integrated
 ## File Finder Comparative Benchmark
 
 Below is the actual output of timings for find, fd, and lf on a directory with
-511295 files. The directory is /home/bill, and it contains a mix of files and directories. The timings were done on a Linux system with a 16 x Intel® Xeon® E5-2670 @ 2.6GHz, 32GB of RAM, and an NVMe SSD.
+465,412 files. The directory is /home/bill, and it contains a mix of files and directories. The timings were done on a Linux system with a 16 x Intel® Xeon® E5-2670 @ 2.6GHz, 32GB of RAM, and an NVMe SSD.
+
+
+
 
 # File Finder Benchmarks - November 22, 2026
 
@@ -33,9 +36,9 @@ Summary:
 
 | Command               | Milliseconds | CPU% | Memory | Faults | Files   |
 | --------------------- | ------------ | ---- | ------ | ------ | ------- |
-| find /home/bill       | 850          | 99   | 35,500 | 11,893 | 511,296 |
-| fd . -H -I /home/bill | 240          | 654  | 51,740 | 13,314 | 511,295 |
-| lf -H /home/bill -T15 | 70           | 1026 | 18,824 | 865    | 511,295 |
+| find /home/bill       | 750          | 99   | 35,228 | 12,004 | 465,413 |
+| fd . -H -I /home/bill | 240          | 586  | 51,336 | 13,531 | 465,412 |
+| lf -H /home/bill      | 70           | 1069 | 19,008 | 872    | 465,412 |
 
 
 NOTE: find counts the root directory as a file, while fd and lf do not. This
@@ -46,66 +49,32 @@ an error. Just subtract 1 from the find count to get an accurate result.
 
 ```
 find /home/bill
-find: ‘/home/bill/.config/google-chrome/BrowserMetrics’: Permission denied
-0.36user 0.48system 0:00.85elapsed 99%CPU (0avgtext+0avgdata 35500maxresident)k
-0inputs+0outputs (0major+11893minor)pagefaults 0swaps
-found 511296 files
+0.33user 0.41system 0:00.75elapsed 99%CPU (0avgtext+0avgdata 35228maxresident)k
+0inputs+0outputs (0major+12004minor)pagefaults 0swaps
+found 465413 files
 ```
+
 ---
 
 ### Baseline fd version 10.5.0
 
 ```
 fd . -H -I /home/bill
-0.91user 0.69system 0:00.24elapsed 654%CPU (0avgtext+0avgdata 51740maxresident)k
-0inputs+0outputs (0major+13314minor)pagefaults 0swaps
-expected 511295 files, found 511295 files
+0.85user 0.59system 0:00.24elapsed 597%CPU (0avgtext+0avgdata 51336maxresident)k
+0inputs+0outputs (0major+13531minor)pagefaults 0swaps
+expected 465412 files, found 465412 files
 ```
----
-
-### lf 6 threads
-
-```
-./lf -H /home/bill -T6
-OPEN_FAIL,/home/bill/.config/google-chrome/BrowserMetrics,13:Permission denied
-0.11user 0.37system 0:00.09elapsed 529%CPU (0avgtext+0avgdata 17316maxresident)k
-0inputs+0outputs (0major+432minor)pagefaults 0swaps
-expected 511295, found 511295 files
-```
----
-
-### lf 13 threads
 
 ---
-```
-./lf -H /home/bill -T13
-OPEN_FAIL,/home/bill/.config/google-chrome/BrowserMetrics,13:Permission denied
-0.18user 0.56system 0:00.07elapsed 957%CPU (0avgtext+0avgdata 18312maxresident)k
-0inputs+0outputs (0major+782minor)pagefaults 0swaps
-expected 511295, found 511295 files
-```
----
-
-### lf 15 threads
+### Baseline lf version 0.3.3
 
 ```
-./lf -H /home/bill -T15
-OPEN_FAIL,/home/bill/.config/google-chrome/BrowserMetrics,13:Permission denied
-0.19user 0.62system 0:00.07elapsed 1026%CPU (0avgtext+0avgdata 18824maxresident)k
-0inputs+0outputs (0major+865minor)pagefaults 0swaps
-expected 511295, found 511295 files
+./lf -H /home/bill
+0.21user 0.62system 0:00.07elapsed 1069%CPU (0avgtext+0avgdata 19008maxresident)k
+0inputs+0outputs (0major+872minor)pagefaults 0swaps
+expected 465412 files, found 465412 files
 ```
-------------------------------------------------
 
-### lf 16 threads
-
-```
-./lf -H /home/bill -T16
-OPEN_FAIL,/home/bill/.config/google-chrome/BrowserMetrics,13:Permission denied
-0.16user 0.67system 0:00.08elapsed 1030%CPU (0avgtext+0avgdata 18780maxresident)k
-0inputs+0outputs (0major+902minor)pagefaults 0swaps
-expected 511295, found 511295 files
-```
 ---
 
 Note: Both find and lf indicate an error on
@@ -266,3 +235,7 @@ The CMake build creates a file in the lf/src directory named compile_commands.js
 Therefore, it is recommended to use CMake for building lf, at least initially.
 Once the compile_commands.json file is generated, you can use your favorite IDE
 or code editor to build and run lf, and to debug and profile it. 
+
+## Limitations
+
+lf currently supports 1024 * 1024 = 1,048,576 directories, which should be equivalent to about 10 million files, assuming an average of 10 files per directory. This was a temporary compromise, resulting in a 4 Mb ring buffer that would comfortably fit in stack space, even on legacy systems, without pruning exhausted nodes. To take full advantage of the ring buffer topology, it is essential to prune exhausted nodes as they are encountered. This will allow lf to traverse a virtually unlimited number of directories, reduce the sequence array size, and improve performance. This work is underway, and it is expected to be completed in the near future. Once this work is completed, lf will be able to handle virtually unlimited numbers of directories and files, making it an even more powerful tool for file discovery and filtering.

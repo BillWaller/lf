@@ -9,7 +9,7 @@
  */
 #define _GNU_SOURCE
 #define _XOPEN_SOURCE 700
-#include "lf.h"
+#include "lf4.h"
 #include <argp.h>
 #include <dirent.h>
 #include <errno.h>

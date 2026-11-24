@@ -911,7 +911,7 @@ void push_root_node(GlobalContext *__G, dev_t dev, ino_t ino) {
         .parent_idx = NO_PARENT,
         .path_offset = 0,
         .path_len = strlen(__G->base_path),
-        .child_dirs_remaining = 0,
+        .child_dirs_remaining = 1,
         .depth = 0,
         .dev = dev,
         .ino = ino,
@@ -945,13 +945,13 @@ void global_arena_destroy(GlobalContext *__G) {
    multiple threads. After flushing, it resets the length of the output_buffer
    to zero.
    */
-void flush_output_buffer(GlobalContext *__G, OutputBuffer *output_buffer) {
-    if (__G == nullptr || output_buffer == nullptr || output_buffer->len == 0)
+void flush_output_buffer(GlobalContext *__G, ThreadLocal *__tl) {
+    if (__G == nullptr || __tl->output_buffer == nullptr || __tl->output_buffer->len == 0)
         return;
     pthread_mutex_lock(&__G->output_mutex);
-    fwrite_unlocked(output_buffer->data, 1, output_buffer->len, stdout);
+    fwrite_unlocked(__tl->output_buffer->data, 1, __tl->output_buffer->len, stdout);
     pthread_mutex_unlock(&__G->output_mutex);
-    output_buffer->len = 0;
+    __tl->output_buffer->len = 0;
 }
 // ----------------------------------------------------------------------
 // APPEND_OUTPUT_BUFFER
@@ -971,9 +971,9 @@ void flush_output_buffer(GlobalContext *__G, OutputBuffer *output_buffer) {
    fit in the buffer, it prints it directly to stdout. The function uses a mutex
    to ensure thread-safe access to stdout when printing directly.
    */
-bool append_output_buffer(GlobalContext *__G, OutputBuffer *output_buffer, const char *path,
+bool append_output_buffer(GlobalContext *__G, ThreadLocal *__tl, const char *path,
                           size_t path_len, bool append_slash) {
-    if (__G == nullptr || output_buffer == nullptr || path == nullptr)
+    if (__G == nullptr || __tl->output_buffer == nullptr || path == nullptr)
         return false;
     size_t line_len = path_len + (append_slash ? 1 : 0) + 1;
     if (line_len > sizeof(OutputBuffer)) {
@@ -985,18 +985,32 @@ bool append_output_buffer(GlobalContext *__G, OutputBuffer *output_buffer, const
         pthread_mutex_unlock(&__G->output_mutex);
         return true;
     }
-    if (output_buffer->len + line_len > sizeof(output_buffer->data))
-        flush_output_buffer(__G, output_buffer);
-    memcpy(output_buffer->data + output_buffer->len, path, path_len);
-    output_buffer->len += path_len;
+    if (__tl->output_buffer->len + line_len > sizeof(__tl->output_buffer->data))
+        flush_output_buffer(__G, __tl);
+    memcpy(__tl->output_buffer->data + __tl->output_buffer->len, path, path_len);
+    __tl->output_buffer->len += path_len;
     if (append_slash)
-        output_buffer->data[output_buffer->len++] = '/';
-    output_buffer->data[output_buffer->len++] = '\n';
+        __tl->output_buffer->data[__tl->output_buffer->len++] = '/';
+    __tl->output_buffer->data[__tl->output_buffer->len++] = '\n';
     return true;
 }
 // ----------------------------------------------------------------------
 // VYUKOV MPMC QUEUE
 // ----------------------------------------------------------------------
+/** @brief Enqueue a node into the MPMC queue.
+    @param lf A pointer to the GlobalContext struct containing the queue.
+    @param node A pointer to the QueueNode to be enqueued.
+    @param path The path string associated with the node.
+    @param len The length of the path string.
+    @return true if the enqueue operation was successful, false if the queue is full.
+    @details This function implements a multi-producer, multi-consumer (MPMC)
+   queue using Vyukov's algorithm. It attempts to enqueue a node into the queue
+   by checking for available slots and using atomic operations to reserve space.
+   If successful, it copies the node and its associated path data into the
+   global queue and updates the sequence numbers accordingly. If the queue is
+   full, it returns false, indicating that the caller should handle the situation
+   (e.g., by falling back to local stack or single enqueue).
+   */
 bool mpmc_enqueue(GlobalContext *__G, QueueNode *node, const char *path, size_t len) {
     size_t pos = atomic_load_explicit(&__G->enqueue_pos, memory_order_relaxed);
     int spin_count = 0;
@@ -1310,13 +1324,48 @@ void *worker(void *arg) {
         // ----------------------------------------------------------------
         // __tl->path_data now contains a relative path to the directory to open
         // ----------------------------------------------------------------
-        __tl.child_dirs_remaining = 0;
         finder(__G, &__tl);
-        __G->queue[q_pos].child_dirs_remaining = __tl.child_dirs_remaining;
+        release_directory_chain(__G, q_pos);
         atomic_fetch_sub_explicit(&__G->active_tasks, 1, memory_order_relaxed);
     }
     munmap(stage_arena, __tl.stage_arena_size);
     return NULL;
+}
+/** @brief Release the directory chain after processing a directory node.
+    @param lf A pointer to the GlobalContext struct containing the queue.
+    @param q_pos The position of the processed directory node in the queue.
+    @details This function releases the directory chain after processing a
+   directory node. It atomically decrements the child_dirs_remaining count for
+   each parent directory in the chain, starting from the processed node. If a
+   parent directory's child count reaches zero, it indicates that all its
+   children have been processed, and the function continues to walk up the chain
+   until it reaches a parent with remaining children or the root. The function
+   also publishes slots as free for reuse in the queue.
+   */
+static inline void release_directory_chain(GlobalContext *__G, uint_fast32_t q_pos) {
+    uint_fast32_t curr = q_pos;
+    while (curr != NO_PARENT) {
+        // Atomically decrement and inspect the value BEFORE subtraction
+        uint32_t prev = atomic_fetch_sub_explicit(
+            &__G->queue[curr & QUEUE_MASK].child_dirs_remaining,
+            1,
+            memory_order_acq_rel);
+        if (prev == 1) {
+            // Count just hit 0: no children remain and this directory is finished.
+            // Read parent_idx BEFORE releasing the slot to a producer!
+            uint_fast32_t parent = __G->queue[curr & QUEUE_MASK].parent_idx;
+
+            // Publish slot as free for the next lap (curr + QUEUE_NODES)
+            atomic_store_explicit(
+                &__G->sequence[curr & QUEUE_MASK],
+                curr + QUEUE_NODES,
+                memory_order_release);
+            curr = parent; // Walk up to parent and decrement its child count
+        } else {
+            // Other children (or the directory's own scan) are still active
+            break;
+        }
+    }
 }
 // ----------------------------------------------------------------------
 // FINDER
@@ -1358,7 +1407,7 @@ void *finder(GlobalContext *__G, ThreadLocal *__tl) {
             lf_log(ERROR, "OPEN_FAIL,%s,%s", __tl->path, strerror(errno));
         } else
             fprintf(stderr, "OPEN_FAIL,%s,%d:%s\n", __tl->path, errno, strerror(errno));
-        flush_output_buffer(__G, __tl->output_buffer);
+        flush_output_buffer(__G, __tl);
         return NULL;
     }
     while (1) {
@@ -1494,7 +1543,9 @@ void *finder(GlobalContext *__G, ThreadLocal *__tl) {
                 if ((__tl->stage_idx >= STAGE_NODES - 1) ||
                     __tl->cum_path_offset >= STAGE_PATH_BYTES - MAX_PATH_LEN) {
                     atomic_fetch_add_explicit(&__G->active_tasks, __tl->stage_idx, memory_order_relaxed);
+                    atomic_fetch_add_explicit(&__G->queue[__tl->queue_idx].child_dirs_remaining, __tl->stage_idx, memory_order_relaxed);
                     if (mpmc_bulk_enqueue(__G, __tl) == false) {
+                        atomic_fetch_sub_explicit(&__G->queue[__tl->queue_idx].child_dirs_remaining, __tl->stage_idx, memory_order_relaxed);
                         atomic_fetch_sub_explicit(&__G->active_tasks, __tl->stage_idx, memory_order_relaxed);
                         atomic_fetch_add_explicit(&__G->error_count, 1, memory_order_relaxed);
                         if (__G->f_logging)
@@ -1513,7 +1564,7 @@ void *finder(GlobalContext *__G, ThreadLocal *__tl) {
                 stage_node->path_offset = __tl->cum_path_offset;
                 stage_node->path_len = __tl->d_name_len;
                 stage_node->depth = __tl->depth;
-                stage_node->child_dirs_remaining = 0;
+                stage_node->child_dirs_remaining = 1;
                 stage_node->dev = effective_dev;
                 stage_node->ino = effective_ino;
                 memcpy(__tl->path_data + stage_node->path_offset,
@@ -1532,7 +1583,6 @@ void *finder(GlobalContext *__G, ThreadLocal *__tl) {
                     if (__G->hidden_only)
                         continue;
                 }
-                __tl->child_dirs_remaining++;
                 if (!__G->only_errors) {
                     build_path(__tl, entry->d_name);
                     print_file(__G, __tl);
@@ -1556,10 +1606,12 @@ void *finder(GlobalContext *__G, ThreadLocal *__tl) {
         }
     }
     close(dir_fd);
-    flush_output_buffer(__G, __tl->output_buffer);
+    flush_output_buffer(__G, __tl);
     if (__tl->stage_idx > 0) {
         atomic_fetch_add_explicit(&__G->active_tasks, __tl->stage_idx, memory_order_relaxed);
+        atomic_fetch_add_explicit(&__G->queue[__tl->queue_idx].child_dirs_remaining, __tl->stage_idx, memory_order_relaxed);
         if (mpmc_bulk_enqueue(__G, __tl) == false) {
+            atomic_fetch_sub_explicit(&__G->queue[__tl->queue_idx].child_dirs_remaining, __tl->stage_idx, memory_order_relaxed);
             atomic_fetch_sub_explicit(&__G->active_tasks, __tl->stage_idx, memory_order_relaxed);
             atomic_fetch_add_explicit(&__G->error_count, 1,
                                       memory_order_relaxed);
@@ -1675,7 +1727,7 @@ int print_file(GlobalContext *__G, ThreadLocal *__tl) {
                 path_len -= 2;
             }
             if (path_len > 0) {
-                append_output_buffer(__G, __tl->output_buffer, path, path_len,
+                append_output_buffer(__G, __tl, path, path_len,
                                      __tl->effective_type == DT_DIR);
             }
             break;
