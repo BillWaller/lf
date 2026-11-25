@@ -2,6 +2,14 @@
 
 # lf
 
+Moore's Law has hit a wall, and the days of exponential CPU performance growth are over. Nevertheless, consumers still expect exponential improvements in performance with each new product generation. Will you be the developer who delivers the performance they want? In the past, you could depend on hardware improvements for big boosts in performance, but those days have ended. Don't worry, we have the solution.
+
+Because the file finder is a core component of applications that deal with large numbers of files, and most do, even if your large file system application is blindingly fast, its performance is capped by the rate of file discovery and filtering by the finder.
+
+Users don't care about the number of cores in the CPU, the clock speed, or the number of lines of code. What they care about is snap. They want responsiveness. Press the button. Get the answer immediately, like a light switch. When your prospective clients compare your competitor's quarter to three quarter seconds latency to your product producing a half-million files in 70 milliseconds, they will naturally perceive you deliver more value. It's not about the time savings in a single operation, but the cumulative time of perhaps hundreds, thousands, or millions of operations over the course of a day, week, or month. lf is three to ten times faster than its mainstream competitors and it is the tool that will give your application the competitive edge.
+
+With the current state of processor technology, the only dependable way to get more performance is to use more cores, and that means relying on multi-threaded code. That can be notoriously difficult, but lf takes care of it for you. lf is a multi-threaded file finder that takes advantage of all available CPU cores to provide lightning fast file discovery and filtering giving your application a real chance to deliver spectacular performance.
+
 lf is a high performance file finder that can be used to generate file lists for pick, shell pipelines, or custom scripts. lf is comparable to the popular find command, but it is designed to be more user-friendly and ridiculously fast.
 
 To say that lf is fast is understated. It is easily ten times faster than find, and, twice as fast as fd. lf handles huge directories with ease. It can be used to find files based on name, type, date, size, and other attributes, making it a powerful tool for file discovery and filtering. It also has an option that only reports cyclic and broken links.

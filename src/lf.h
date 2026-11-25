@@ -314,15 +314,6 @@ typedef struct {
     dev_t dev;                                                          //   8
     ino_t ino;                                                          //   8
 } QueueNode;                                                            //  36 bytes total
-typedef struct {
-    uint_fast32_t parent_idx;                  //   4
-    uint_fast32_t path_offset;                 //   4
-    uint_fast32_t path_len;                    //   4
-    atomic_uint_fast32_t child_dirs_remaining; //   4
-    uint_fast32_t depth;                       //   4
-    dev_t dev;                                 //   8
-    ino_t ino;                                 //   8
-} LocalQueueNode;                              //  36 bytes total
 // ---------------------------------------------------------------
 // OUTPUT BUFFER
 // ---------------------------------------------------------------
