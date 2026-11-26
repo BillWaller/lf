@@ -276,7 +276,8 @@ line_no  errors Conflicts
    1507       2   1086  1086
          ------ 
 total       146 (2 x 73) 
-
+```
+```c
 Relevant source code from lf.c
 
   1086	        *dst = __tl->stage[i]; // FIX: Ensure that the entire QueueNode is
