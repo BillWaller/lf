@@ -36,6 +36,7 @@ for i in "${!a[@]}"; do
         fi
     fi
 done
+rm time.out wc.out
 exit 0
 echo ================================================
 CommandStr="$PUT -H $directory"

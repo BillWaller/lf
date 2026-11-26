@@ -165,6 +165,7 @@ TMP_ERRS=h_errs.tmp
 TMP_CONFLICT1=h_conflict1.tmp
 TMP_CONFLICT2=h_conflict2.tmp
 TMP_INTERNAL=h_internal.tmp
+TMP_TARGET=h_target.tmp
 grep -v -e "vg_replace" -e "hg_intercepts" -e "Locks held:" helgrind.out |
     sed -n '6,$p' |
     sed '/^$/d
@@ -202,8 +203,25 @@ echo >>"$TMP_CONFLICT2"
 cat $TMP_RPT >>"$newfile"
 echo >>"$newfile"
 paste $TMP_ERRS $TMP_CONFLICT2 | sed 's/\t/ /g' >>"$newfile"
+echo >>"$newfile"
+echo "Relevant source code from $target.c" >>$newfile
+echo >>"$newfile"
+cp ../"$target.c" $TMP_TARGET
+awk 'NR == FNR {
+    if (match($1, /[0-9]+/)) {
+        target[substr($1, RSTART, RLENGTH)] = 1
+    }
+    next
+}
+FNR in target { printing = 1 }
+printing {
+    printf("%6d\t%s\n", FNR, $0)
+    if (/;/) printing = 0
+}' "$TMP_ERRS" "$TMP_TARGET" >>"$newfile"
+echo >>"$newfile"
 echo created "$newfile"
-rm -f $TMP_PASS1 $TMP_RPT $TMP_ERRS $TMP_CONFLICT1 $TMP_CONFLICT2 $TMP_INTERNAL
+rm -f $TMP_PASS1 $TMP_RPT $TMP_ERRS $TMP_CONFLICT1 $TMP_CONFLICT2 $TMP_TARGET \
+    $TMP_INTERNAL
 cd ..
 cp $target.c "$newbase.c"
 echo copied "$target".c to "$newbase".c

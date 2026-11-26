@@ -177,6 +177,8 @@ cmake -B build -DCMAKE_BUILD_TYPE=Debug
 
 Before running valgrind or helgrind, you must build the Debug variant of lf. This is because valgrind and helgrind require debug symbols to be present in the binary in order to provide meaningful output. If you try to run valgrind or helgrind on a Release build, you will get a lot of warnings and errors that are not relevant to your code.
 
+### Valgrind and Helgrind How To
+
 - To run valgrind:
 
 ```bash
@@ -202,24 +204,134 @@ Helgrind, a thread error detector
 Copyright (C) 2007-2026, and GNU GPL'd, by OpenWorks LLP et al.
 Using Valgrind-3.29.0.GIT and LibVEX; rerun with -h for copyright info
 Command: ./lf -H
-2026-11-23T16:32:24Z Condensed Format by Bill Waller
+2026-11-26T00:31:40Z Condensed Format by Bill Waller
 
 cntxt errors action size  at_addr by_addr fn                          thread  line
 ----- ------ ------ ---- -------- ------- ------------------------------ --- -----
-    1      7 write     8  4AB22C8  4075EE mpmc_dequeue                     2  1200
-    1        read                  40745E mpmc_dequeue                    16  1155
+    1      1 read      4  4AB2140  40751F mpmc_dequeue                    12  1129
+    1        write                 407703 mpmc_dequeue                    16  1153
+    2      1 write     4  4AB2140  407703 mpmc_dequeue                    16  1153
+    2        read                  40751F mpmc_dequeue                     3  1129
+    3      1 read      4  56BD900  407C98 release_directory_chain          3  1276
+    3        write                 407214 mpmc_bulk_enqueue                5  1086
+    4      1 read      1  56BD95A  407AB7 worker                           3  1233
+    4        write                 407227 mpmc_bulk_enqueue                5  1086
+    5      2 read      2  56BD4DC  407AB7 worker                          16  1233
+    5        write                 407227 mpmc_bulk_enqueue                2  1086
+    6      2 read      4  56BD340  407C68 release_directory_chain          5  1269
+    6        write                 407227 mpmc_bulk_enqueue                2  1086
+    7      2 read      2  56BD4DC  407B95 worker                          16  1246
+    7        write                 407227 mpmc_bulk_enqueue                2  1086
+    8      2 read      4  56BD4C0  408962 flush_stage_buffer              16  1507
+    8        write                 407227 mpmc_bulk_enqueue                2  1086
+    9      3 read      4  56BD4C4  408385 finder                          16  1402
+    9        write                 407227 mpmc_bulk_enqueue                2  1086
+   10      3 read      1  56BD958  407AB7 worker                           3  1233
+   10        write                 407227 mpmc_bulk_enqueue                5  1086
+   11      3 read      4  56BD300  4079A6 worker                           5  1219
+   11        write                 407214 mpmc_bulk_enqueue                2  1086
+   12      3 read      2  56BD458  40794C worker                           5  1214
+   12        write                 40729E mpmc_bulk_enqueue                2  1086
+   13      3 write     4  4AB2310  40761E mpmc_dequeue                     5  1143
+   13        write                 407431 mpmc_bulk_enqueue                2  1105
+   14      3 read      4  4AB2314  4075E9 mpmc_dequeue                     5  1142
+   14        write                 407407 mpmc_bulk_enqueue                2  1104
+   15      4 read      4  4AB2310  40756E mpmc_dequeue                     5  1134
+   15        write                 407431 mpmc_bulk_enqueue                2  1105
+   16      4 read      4  56BD480  4079F8 worker                          16  1222
+   16        write                 407214 mpmc_bulk_enqueue                2  1086
+   17      4 read      2  56BD5D8  4079C8 worker                          16  1221
+   17        write                 40729E mpmc_bulk_enqueue                2  1086
+   18      4 write     4  4AB2308  407431 mpmc_bulk_enqueue                2  1105
+   18        read                  40756E mpmc_dequeue                    16  1134
+   19      5 read      2  56BD358  407AB7 worker                           5  1233
+   19        write                 407227 mpmc_bulk_enqueue                2  1086
+   20      8 write     4  4AB2328  407CD0 release_directory_chain          5  1279
+   20        read                  40756E mpmc_dequeue                    13  1134
+   21     14 read      2  56BD4D8  407B95 worker                          16  1246
+   21        write                 407227 mpmc_bulk_enqueue                2  1086
       ------
-           7 total errors
+          73 total errors
 
 line_no  errors Conflicts
 -------  ------ -------------------------------------------------
-   1155       7   1200
-   1200       7   1155
+   1086      49   1214  1219  1221  1222  1233  1246  1269  1276  1402  1507
+   1104       3   1142
+   1105      11   1134  1143
+   1129       2   1153
+   1134      16   1105  1279
+   1142       3   1104
+   1143       3   1105
+   1153       2   1129
+   1214       3   1086
+   1219       3   1086
+   1221       4   1086
+   1222       4   1086
+   1233      11   1086
+   1246      16   1086
+   1269       2   1086
+   1276       1   1086
+   1279       8   1134
+   1402       3   1086
+   1507       2   1086  1086
          ------ 
-total        14 (2 x 7) 
+total       146 (2 x 73) 
+
+Relevant source code from lf.c
+
+  1086	        *dst = __tl->stage[i]; // FIX: Ensure that the entire QueueNode is
+  1104	                    slot->node_idx = allocated_indices[i];
+  1105	                    atomic_store_explicit(&slot->sequence, pos + 1, memory_order_release);
+  1129	        if (atomic_load_explicit(&__G->shut_down, memory_order_acquire)) {
+  1130	            return false;
+  1134	        uint32_t seq = atomic_load_explicit(&slot->sequence, memory_order_acquire);
+  1142	                *out_node_idx = slot->node_idx;
+  1143	                atomic_store_explicit(&slot->sequence, pos + QUEUE_NODES, memory_order_release);
+  1153	                    atomic_store_explicit(&__G->shut_down, 1, memory_order_release);
+  1214	        uint32_t q_path_len = __G->queue[q_pos].name_len;
+  1219	        uint32_t parent_idx = __G->queue[q_pos].parent_idx;
+  1221	            cum_path_len += __G->queue[parent_idx].name_len + 1;
+  1222	            parent_idx = __G->queue[parent_idx].parent_idx;
+  1233	        memcpy(&__tl.path[write_cursor],
+  1234	               &__G->queue[q_pos].name, __G->queue[q_pos].name_len);
+  1246	            memcpy(&__tl.path[write_cursor],
+  1247	                   &__G->queue[parent_idx].name,
+  1248	                   __G->queue[parent_idx].name_len);
+  1269	        uint32_t prev = atomic_fetch_sub_explicit(
+  1270	            &__G->queue[curr & QUEUE_MASK].child_dirs_remaining,
+  1271	            1,
+  1272	            memory_order_acq_rel);
+  1276	            uint32_t parent = __G->queue[curr & QUEUE_MASK].parent_idx;
+  1279	            atomic_store_explicit(
+  1280	                &__G->ring[curr & QUEUE_MASK].sequence,
+  1281	                curr + QUEUE_NODES,
+  1282	                memory_order_release);
+  1402	                __tl->depth = __G->queue[__tl->queue_idx].depth + 1;
+  1507	    atomic_fetch_add_explicit(&__G->queue[__tl->queue_idx].child_dirs_remaining, __tl->stage_idx, memory_order_relaxed);
 ```
 
+Of course, we wouldn't distribute lf with helgrind or valgrind errors. Here's
+what it looks like when you run lf with helgrind and no errors are found:
+
+```
+Helgrind, a thread error detector
+Copyright (C) 2007-2026, and GNU GPL'd, by OpenWorks LLP et al.
+Using Valgrind-3.29.0.GIT and LibVEX; rerun with -h for copyright info
+Command: ./lf -H
+2026-11-21T20:56:49Z Condensed Format by Bill Waller
+
+cntxt errors action size  at_addr by_addr fn                          thread  line
+----- ------ ------ ---- -------- ------- ------------------------------ --- -----
+      ------
+           0 total errors
+
+      0       0 Conflicts
+         ------ -------------------------------------------------
+total         0 (2 x 0) 
 ---
+```
+
+###
 
 Note: You can build lf with a simple compile command such as:
 

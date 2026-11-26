@@ -40,11 +40,11 @@ extern "C" {
 #define MAX_THREADS 64
 #define MAX_DEPTH 64
 #define CACHE_LINE_SIZE 64
-#define STAGE_NODES 32
+#define STAGE_NODES 8
 #define STAGE_PATH_BYTES (STAGE_NODES * 1024)
 #define MAX_PATH_LEN PATH_MAX
 #define MAX_LOG_RECORD_LEN MAX_PATH_LEN
-#define DIR_BUF_SIZE 131072
+#define DIR_BUF_SIZE 65536
 #define QUEUE_NODES (1024 * 1024)
 #define PATH_BYTES (32 * 1024 * 1024)
 #define MAX_LOG_REC_LEN 1024
@@ -306,14 +306,14 @@ typedef enum {
 // ---------------------------------------------------------------
 #define NO_PARENT UINT32_MAX
 typedef struct {
-    uint_fast32_t parent_idx;                                           //   4
-    uint_fast32_t path_offset;                                          //   4
-    uint_fast32_t path_len;                                             //   4
-    alignas(CACHE_LINE_SIZE) atomic_uint_fast32_t child_dirs_remaining; //   4
-    uint_fast32_t depth;                                                //   4
-    dev_t dev;                                                          //   8
-    ino_t ino;                                                          //   8
-} QueueNode;                                                            //  36 bytes total
+    uint_fast32_t parent_idx;           //   4
+    uint_fast32_t path_offset;          //   4
+    uint_fast32_t path_len;             //   4
+    uint_fast32_t child_dirs_remaining; //   4
+    uint_fast32_t depth;                //   4
+    dev_t dev;                          //   8
+    ino_t ino;                          //   8
+} QueueNode;                            //  36 bytes total
 // ---------------------------------------------------------------
 // OUTPUT BUFFER
 // ---------------------------------------------------------------
@@ -392,14 +392,13 @@ typedef struct {
     size_t queue_bytes;
     size_t path_bytes;
     pthread_mutex_t output_mutex;
-    atomic_size_t file_count;
     atomic_size_t error_count;
     atomic_size_t log_error_count;
     pthread_t *threads;
-    unsigned int nthreads;
     long start;
+    unsigned int nthreads;
+    atomic_size_t file_count;
     uintmax_t user_id;
-    char *user_name;
     off_t file_size_min;
     int err_fd;
     int log_fd;
@@ -416,6 +415,7 @@ typedef struct {
     char *base_path;
     char *re;
     char *ere;
+    char *user_name;
     char *sbuffer;
     regex_t compiled_re;
     regex_t compiled_ere;
@@ -423,7 +423,6 @@ typedef struct {
     unsigned char include_types;
     unsigned char suppress_types;
     char log_record[MAX_LOG_RECORD_LEN];
-    bool f_logging;
     bool unlink;
     bool xdev;
     bool depth_first;
@@ -434,6 +433,7 @@ typedef struct {
     bool hidden_only;
     bool follow_links;
     tss_e timestamp_style;
+    bool f_logging;
     ll_e disp_level_mask;
     ll_e file_level_mask;
     bool only_errors;
@@ -479,14 +479,13 @@ void debug_out(GlobalContext *__G, int, char **);
 bool init_lf(GlobalContext *__G, int, char **);
 int sort_lf_output(GlobalContext *__G, int, char **);
 void *worker(void *arg);
-void *finder(GlobalContext *__G, ThreadLocal *__tl);
-int print_file(GlobalContext *__G, ThreadLocal *__tl);
-void flush_output_buffer(GlobalContext *, ThreadLocal *__tl);
-bool append_output_buffer(GlobalContext *__G, ThreadLocal *__tl, const char *path, size_t path_len, bool append_slash);
+void *finder(GlobalContext *__G, ThreadLocal *tl);
+int print_file(GlobalContext *__G, ThreadLocal *tl);
+void flush_output_buffer(GlobalContext *, OutputBuffer *);
+bool append_output_buffer(GlobalContext *__G, OutputBuffer *output, const char *path, size_t path_len, bool append_slash);
 void finalize_dir_node(GlobalContext *__G, size_t node_offset);
 bool global_arena_create(GlobalContext *__G);
 void global_arena_destroy(GlobalContext *__G);
-static inline void release_directory_chain(GlobalContext *__G, uint_fast32_t q_pos);
 void push_root_node(GlobalContext *__G, dev_t dev, ino_t ino);
 bool mpmc_enqueue(GlobalContext *__G, QueueNode *node, const char *path, size_t len);
 bool mpmc_enqueue_staged(GlobalContext *, ThreadLocal *__tl);
@@ -494,7 +493,7 @@ bool mpmc_bulk_enqueue(GlobalContext *__G, ThreadLocal *__tl);
 bool mpmc_dequeue(GlobalContext *__G, uint_fast32_t *dequeue_pos);
 char *path_data_init(GlobalContext *__G, LogCtx *log_ctx);
 void path_data_destroy(GlobalContext *__G);
-size_t flush_ch(GlobalContext *__G, ThreadLocal *__tl);
+size_t flush_ch(GlobalContext *__G, ThreadLocal *tl);
 void iso8601_timestamp(GlobalContext *__G, LogCtx *log_ctx);
 bool parse_local_timestamp(const char *s, time_t *out);
 char *format_local_timestamp(time_t t, char *buf, size_t n);

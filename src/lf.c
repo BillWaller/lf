@@ -866,16 +866,6 @@ endlf:
 // ----------------------------------------------------------------------
 // GLOBAL ARENA
 // ----------------------------------------------------------------------
-/** @brief Create a queue arena for managing directory traversal tasks.
-    @param lf A pointer to the GlobalContext struct where the queue arena will be
-   created.
-    @param max_nodes The maximum number of nodes that the queue arena can hold.
-    @details This function allocates memory for a QueueArena structure and
-   initializes its properties. It uses mmap to allocate a contiguous block of
-   memory for the queue nodes, allowing for efficient management of directory
-   traversal tasks in a multi-threaded environment. The cursor is initialized to
-   zero, indicating that no nodes have been added yet.
-   */
 bool global_arena_create(GlobalContext *__G) {
     __G->queue_bytes = sizeof(QueueNode) * QUEUE_NODES;
     __G->path_bytes = 32 * QUEUE_NODES;
@@ -911,7 +901,7 @@ void push_root_node(GlobalContext *__G, dev_t dev, ino_t ino) {
         .parent_idx = NO_PARENT,
         .path_offset = 0,
         .path_len = strlen(__G->base_path),
-        .child_dirs_remaining = 1,
+        .child_dirs_remaining = 0,
         .depth = 0,
         .dev = dev,
         .ino = ino,
@@ -921,12 +911,6 @@ void push_root_node(GlobalContext *__G, dev_t dev, ino_t ino) {
     mpmc_enqueue(__G, &root_node, __G->base_path, strlen(__G->base_path));
     return;
 }
-/** @brief Destroy the queue arena and free associated resources.
-    @param lf A pointer to the GlobalContext struct containing the queue arena.
-    @details This function unmaps the memory allocated for the queue arena using
-   munmap. It checks if the arena pointer is valid before attempting to unmap it,
-   ensuring that resources are properly released when they are no longer needed.
-   */
 void global_arena_destroy(GlobalContext *__G) {
     if (!__G->arena)
         return;
@@ -945,13 +929,13 @@ void global_arena_destroy(GlobalContext *__G) {
    multiple threads. After flushing, it resets the length of the output_buffer
    to zero.
    */
-void flush_output_buffer(GlobalContext *__G, ThreadLocal *__tl) {
-    if (__G == nullptr || __tl->output_buffer == nullptr || __tl->output_buffer->len == 0)
+void flush_output_buffer(GlobalContext *__G, OutputBuffer *output_buffer) {
+    if (__G == nullptr || output_buffer == nullptr, output_buffer->len == 0)
         return;
     pthread_mutex_lock(&__G->output_mutex);
-    fwrite_unlocked(__tl->output_buffer->data, 1, __tl->output_buffer->len, stdout);
+    fwrite_unlocked(output_buffer->data, 1, output_buffer->len, stdout);
     pthread_mutex_unlock(&__G->output_mutex);
-    __tl->output_buffer->len = 0;
+    output_buffer->len = 0;
 }
 // ----------------------------------------------------------------------
 // APPEND_OUTPUT_BUFFER
@@ -971,9 +955,9 @@ void flush_output_buffer(GlobalContext *__G, ThreadLocal *__tl) {
    fit in the buffer, it prints it directly to stdout. The function uses a mutex
    to ensure thread-safe access to stdout when printing directly.
    */
-bool append_output_buffer(GlobalContext *__G, ThreadLocal *__tl, const char *path,
+bool append_output_buffer(GlobalContext *__G, OutputBuffer *output_buffer, const char *path,
                           size_t path_len, bool append_slash) {
-    if (__G == nullptr || __tl->output_buffer == nullptr || path == nullptr)
+    if (__G == nullptr || output_buffer == nullptr || path == nullptr)
         return false;
     size_t line_len = path_len + (append_slash ? 1 : 0) + 1;
     if (line_len > sizeof(OutputBuffer)) {
@@ -985,32 +969,18 @@ bool append_output_buffer(GlobalContext *__G, ThreadLocal *__tl, const char *pat
         pthread_mutex_unlock(&__G->output_mutex);
         return true;
     }
-    if (__tl->output_buffer->len + line_len > sizeof(__tl->output_buffer->data))
-        flush_output_buffer(__G, __tl);
-    memcpy(__tl->output_buffer->data + __tl->output_buffer->len, path, path_len);
-    __tl->output_buffer->len += path_len;
+    if (output_buffer->len + line_len > sizeof(output_buffer->data))
+        flush_output_buffer(__G, output_buffer);
+    memcpy(output_buffer->data + output_buffer->len, path, path_len);
+    output_buffer->len += path_len;
     if (append_slash)
-        __tl->output_buffer->data[__tl->output_buffer->len++] = '/';
-    __tl->output_buffer->data[__tl->output_buffer->len++] = '\n';
+        output_buffer->data[output_buffer->len++] = '/';
+    output_buffer->data[output_buffer->len++] = '\n';
     return true;
 }
 // ----------------------------------------------------------------------
 // VYUKOV MPMC QUEUE
 // ----------------------------------------------------------------------
-/** @brief Enqueue a node into the MPMC queue.
-    @param lf A pointer to the GlobalContext struct containing the queue.
-    @param node A pointer to the QueueNode to be enqueued.
-    @param path The path string associated with the node.
-    @param len The length of the path string.
-    @return true if the enqueue operation was successful, false if the queue is full.
-    @details This function implements a multi-producer, multi-consumer (MPMC)
-   queue using Vyukov's algorithm. It attempts to enqueue a node into the queue
-   by checking for available slots and using atomic operations to reserve space.
-   If successful, it copies the node and its associated path data into the
-   global queue and updates the sequence numbers accordingly. If the queue is
-   full, it returns false, indicating that the caller should handle the situation
-   (e.g., by falling back to local stack or single enqueue).
-   */
 bool mpmc_enqueue(GlobalContext *__G, QueueNode *node, const char *path, size_t len) {
     size_t pos = atomic_load_explicit(&__G->enqueue_pos, memory_order_relaxed);
     int spin_count = 0;
@@ -1050,18 +1020,6 @@ bool mpmc_enqueue(GlobalContext *__G, QueueNode *node, const char *path, size_t 
     atomic_thread_fence(memory_order_release);
     return true;
 }
-/** @brief Bulk enqueue multiple nodes into the MPMC queue.
-    @param lf A pointer to the GlobalContext struct containing the queue.
-    @param tl A pointer to the ThreadLocal struct containing the nodes to enqueue.
-    @return true if the bulk enqueue was successful, false if the queue is full.
-    @details This function attempts to enqueue multiple nodes from a thread-local
-   buffer into a multi-producer, multi-consumer (MPMC) queue. It checks for
-   available slots in the queue and uses atomic operations to reserve space for
-   the nodes. If successful, it copies the nodes and their associated path data
-   into the global queue and updates the sequence numbers accordingly. If the
-   queue is full, it returns false, indicating that the caller should fall back
-   to local stack or single enqueue.
-   */
 bool mpmc_bulk_enqueue(GlobalContext *__G, ThreadLocal *__tl) {
     if (__tl->stage_idx == 0)
         return true;
@@ -1145,19 +1103,6 @@ bool mpmc_bulk_enqueue(GlobalContext *__G, ThreadLocal *__tl) {
     __tl->path_data[0] = '\0';
     return true;
 }
-/** @brief Dequeue a node from the MPMC queue.
-    @param lf A pointer to the GlobalContext struct containing the queue.
-    @param dequeue_pos A pointer to a uint_fast32_t variable where the dequeued
-   position will be stored.
-    @return true if a node was successfully dequeued, false if the queue is empty or
-   shut down.
-    @details This function attempts to dequeue a node from a multi-producer,
-   multi-consumer (MPMC) queue. It checks for available nodes in the queue and
-   uses atomic operations to claim a node for processing. If successful, it
-   updates the sequence number for the dequeued position and returns true. If the
-   queue is empty or has been shut down, it returns false, indicating that there
-   are no more nodes to process.
-   */
 bool mpmc_dequeue(GlobalContext *__G, uint_fast32_t *dequeue_pos) {
     alignas(CACHE_LINE_SIZE) uint_fast32_t pos = atomic_load_explicit(&__G->dequeue_pos, memory_order_relaxed);
     int spin_count = 0;
@@ -1211,34 +1156,20 @@ bool mpmc_dequeue(GlobalContext *__G, uint_fast32_t *dequeue_pos) {
 #ifdef DEBUGX
     fprintf(stderr, "line: %d, %s, dequeued pos %lu\n", __LINE__, __func__, *dequeue_pos);
 #endif
+    // atomic_store_explicit(&__G->sequence[pos & QUEUE_MASK],
+    //                       pos + QUEUE_NODES, memory_order_release);
     uint_fast32_t reset_seq = pos + QUEUE_NODES;
     atomic_exchange_explicit(&__G->sequence[pos & QUEUE_MASK], reset_seq, memory_order_release);
     return true;
 }
-/** @brief Release a slot in the MPMC queue after processing.
-    @param lf A pointer to the GlobalContext struct containing the queue.
-    @param pos The position of the slot to release.
-    @details This function updates the sequence number for a given slot in the
-   multi-producer, multi-consumer (MPMC) queue, indicating that the slot is now
-   available for reuse. It uses an atomic store operation with memory_order_release
-   to ensure proper synchronization between threads.
-   */
 static inline void mpmc_release_slot(GlobalContext *__G, uint_fast32_t pos) {
     atomic_store_explicit(&__G->sequence[pos & QUEUE_MASK],
                           pos + QUEUE_NODES, memory_order_release);
     // mpmc_release_slot(__G, pos);
 }
 // ----------------------------------------------------------------------
-/** @brief Worker thread function for processing directory nodes.
-    @param arg A pointer to the GlobalContext struct containing the search settings.
-    @return NULL upon completion.
-    @details This function is executed by each worker thread. It dequeues
-   directory nodes from the global queue, reconstructs their paths, and invokes
-   the finder function to process them. Each thread maintains its own local
-   context, including a stage arena for temporary storage of nodes and path
-   data. The function continues processing until there are no more nodes to
-   dequeue or the search is shut down.
-   */
+// WORKER
+// ----------------------------------------------------------------------
 void *worker(void *arg) {
     GlobalContext *__G = (GlobalContext *)arg;
     ThreadLocal __tl;
@@ -1325,63 +1256,14 @@ void *worker(void *arg) {
         // __tl->path_data now contains a relative path to the directory to open
         // ----------------------------------------------------------------
         finder(__G, &__tl);
-        release_directory_chain(__G, q_pos);
         atomic_fetch_sub_explicit(&__G->active_tasks, 1, memory_order_relaxed);
     }
     munmap(stage_arena, __tl.stage_arena_size);
     return NULL;
 }
-/** @brief Release the directory chain after processing a directory node.
-    @param lf A pointer to the GlobalContext struct containing the queue.
-    @param q_pos The position of the processed directory node in the queue.
-    @details This function releases the directory chain after processing a
-   directory node. It atomically decrements the child_dirs_remaining count for
-   each parent directory in the chain, starting from the processed node. If a
-   parent directory's child count reaches zero, it indicates that all its
-   children have been processed, and the function continues to walk up the chain
-   until it reaches a parent with remaining children or the root. The function
-   also publishes slots as free for reuse in the queue.
-   */
-static inline void release_directory_chain(GlobalContext *__G, uint_fast32_t q_pos) {
-    uint_fast32_t curr = q_pos;
-    while (curr != NO_PARENT) {
-        // Atomically decrement and inspect the value BEFORE subtraction
-        uint32_t prev = atomic_fetch_sub_explicit(
-            &__G->queue[curr & QUEUE_MASK].child_dirs_remaining,
-            1,
-            memory_order_acq_rel);
-        if (prev == 1) {
-            // Count just hit 0: no children remain and this directory is finished.
-            // Read parent_idx BEFORE releasing the slot to a producer!
-            uint_fast32_t parent = __G->queue[curr & QUEUE_MASK].parent_idx;
-
-            // Publish slot as free for the next lap (curr + QUEUE_NODES)
-            atomic_store_explicit(
-                &__G->sequence[curr & QUEUE_MASK],
-                curr + QUEUE_NODES,
-                memory_order_release);
-            curr = parent; // Walk up to parent and decrement its child count
-        } else {
-            // Other children (or the directory's own scan) are still active
-            break;
-        }
-    }
-}
 // ----------------------------------------------------------------------
 // FINDER
 // ----------------------------------------------------------------------
-/** @brief Traverse a directory and process its entries.
-    @param lf A pointer to the GlobalContext struct containing the search settings.
-    @param tl A pointer to the ThreadLocal struct containing the current directory context.
-    @return NULL upon completion.
-    @details This function opens a directory specified in the ThreadLocal context,
-   reads its entries, and processes each entry based on the provided settings in
-   the GlobalContext. It handles filtering of directory entries, retrieves
-   advanced metadata if necessary, and manages the traversal of subdirectories.
-   The function also logs errors and flushes output buffers as needed. It is
-   designed to be called by worker threads for concurrent processing of
-   directories.
-   */
 void *finder(GlobalContext *__G, ThreadLocal *__tl) {
     long nread;
     struct stat sb = {};
@@ -1407,7 +1289,7 @@ void *finder(GlobalContext *__G, ThreadLocal *__tl) {
             lf_log(ERROR, "OPEN_FAIL,%s,%s", __tl->path, strerror(errno));
         } else
             fprintf(stderr, "OPEN_FAIL,%s,%d:%s\n", __tl->path, errno, strerror(errno));
-        flush_output_buffer(__G, __tl);
+        flush_output_buffer(__G, __tl->output_buffer);
         return NULL;
     }
     while (1) {
@@ -1543,9 +1425,7 @@ void *finder(GlobalContext *__G, ThreadLocal *__tl) {
                 if ((__tl->stage_idx >= STAGE_NODES - 1) ||
                     __tl->cum_path_offset >= STAGE_PATH_BYTES - MAX_PATH_LEN) {
                     atomic_fetch_add_explicit(&__G->active_tasks, __tl->stage_idx, memory_order_relaxed);
-                    atomic_fetch_add_explicit(&__G->queue[__tl->queue_idx].child_dirs_remaining, __tl->stage_idx, memory_order_relaxed);
                     if (mpmc_bulk_enqueue(__G, __tl) == false) {
-                        atomic_fetch_sub_explicit(&__G->queue[__tl->queue_idx].child_dirs_remaining, __tl->stage_idx, memory_order_relaxed);
                         atomic_fetch_sub_explicit(&__G->active_tasks, __tl->stage_idx, memory_order_relaxed);
                         atomic_fetch_add_explicit(&__G->error_count, 1, memory_order_relaxed);
                         if (__G->f_logging)
@@ -1563,8 +1443,8 @@ void *finder(GlobalContext *__G, ThreadLocal *__tl) {
                 stage_node->parent_idx = __tl->queue_idx;
                 stage_node->path_offset = __tl->cum_path_offset;
                 stage_node->path_len = __tl->d_name_len;
+                stage_node->child_dirs_remaining = 0;
                 stage_node->depth = __tl->depth;
-                stage_node->child_dirs_remaining = 1;
                 stage_node->dev = effective_dev;
                 stage_node->ino = effective_ino;
                 memcpy(__tl->path_data + stage_node->path_offset,
@@ -1606,12 +1486,10 @@ void *finder(GlobalContext *__G, ThreadLocal *__tl) {
         }
     }
     close(dir_fd);
-    flush_output_buffer(__G, __tl);
+    flush_output_buffer(__G, __tl->output_buffer);
     if (__tl->stage_idx > 0) {
         atomic_fetch_add_explicit(&__G->active_tasks, __tl->stage_idx, memory_order_relaxed);
-        atomic_fetch_add_explicit(&__G->queue[__tl->queue_idx].child_dirs_remaining, __tl->stage_idx, memory_order_relaxed);
         if (mpmc_bulk_enqueue(__G, __tl) == false) {
-            atomic_fetch_sub_explicit(&__G->queue[__tl->queue_idx].child_dirs_remaining, __tl->stage_idx, memory_order_relaxed);
             atomic_fetch_sub_explicit(&__G->active_tasks, __tl->stage_idx, memory_order_relaxed);
             atomic_fetch_add_explicit(&__G->error_count, 1,
                                       memory_order_relaxed);
@@ -1624,15 +1502,6 @@ void *finder(GlobalContext *__G, ThreadLocal *__tl) {
     }
     return NULL;
 }
-/** @brief Build the full path for a file or directory entry.
-    @param tl A pointer to the ThreadLocal struct containing the current directory context.
-    @param file_name The name of the file or directory entry to append to the path.
-    @details This function constructs the full path for a given file or directory
-   entry by appending its name to the parent path stored in the ThreadLocal
-   context. It updates the path length and ensures that the resulting path is
-   null-terminated. This function is used during directory traversal to prepare
-   paths for processing and output.
-   */
 void build_path(ThreadLocal *__tl, char *file_name) {
     __tl->path_len = __tl->parent_path_len;
     __tl->path[__tl->path_len++] = '/';
@@ -1641,17 +1510,6 @@ void build_path(ThreadLocal *__tl, char *file_name) {
     __tl->path_len += __tl->d_name_len;
     __tl->path[__tl->path_len] = '\0';
 }
-/** @brief Print the path of a file or directory entry based on filtering criteria.
-    @param lf A pointer to the GlobalContext struct containing the search settings.
-    @param tl A pointer to the ThreadLocal struct containing the current directory context.
-    @return true if the file or directory entry was printed, false otherwise.
-    @details This function checks various filtering criteria specified in the
-   GlobalContext, such as type suppression, regex matching, user ownership,
-   permissions, modification time, and file size. If the entry passes all
-   filters, it increments the file count and appends the path to the output
-   buffer for printing. The function returns true if the entry was printed and
-   false if it was excluded based on any of the filtering criteria.
-   */
 int print_file(GlobalContext *__G, ThreadLocal *__tl) {
     while (1) {
         if (__G->suppress_types & lf_type_mask[__tl->effective_type])
@@ -1727,7 +1585,7 @@ int print_file(GlobalContext *__G, ThreadLocal *__tl) {
                 path_len -= 2;
             }
             if (path_len > 0) {
-                append_output_buffer(__G, __tl, path, path_len,
+                append_output_buffer(__G, __tl->output_buffer, path, path_len,
                                      __tl->effective_type == DT_DIR);
             }
             break;
@@ -1768,17 +1626,6 @@ static const char DIV100_TABLE[] = "0001020304050607080910111213141516171819"
         while (*s)             \
             *p++ = *s++;       \
     } while (0)
-/** @brief Write a 3-digit unsigned integer to a buffer.
-    @ingroup logging
-    @param p Pointer to the buffer where the integer will be written.
-    @param val The unsigned integer value to write (0-999).
-    @return Pointer to the next position in the buffer after writing the integer.
-    @details This function writes a 3-digit unsigned integer to a provided
-   buffer. It calculates the hundreds, tens, and units digits and uses a lookup
-   table for efficient conversion of the last two digits. The function ensures
-   that the value is correctly formatted as a 3-digit string, even if the value
-   is less than 100, by padding with leading zeros as necessary.
-   */
 static inline char *write_uint3d(char *p, long val) {
     long hundreds = val / 100;
     long remainder = val % 100;
@@ -1787,17 +1634,6 @@ static inline char *write_uint3d(char *p, long val) {
     *p++ = DIV100_TABLE[remainder * 2 + 1];
     return p;
 }
-/** @brief Write a 2-digit unsigned integer to a buffer.
-    @ingroup logging
-    @param p Pointer to the buffer where the integer will be written.
-    @param val The unsigned integer value to write (0-99).
-    @return Pointer to the next position in the buffer after writing the integer.
-    @details This function writes a 2-digit unsigned integer to a provided
-   buffer. It uses a lookup table for efficient conversion of the value into its
-   string representation. The function ensures that the value is correctly
-   formatted as a 2-digit string, even if the value is less than 10, by padding
-   with a leading zero as necessary.
-   */
 static inline char *write_uint2d(char *p, long val) {
     *p++ = DIV100_TABLE[val * 2];
     *p++ = DIV100_TABLE[val * 2 + 1];
@@ -1996,7 +1832,7 @@ void log_open(GlobalContext *__G, LogCtx *log_ctx, size_t thread_id) {
         }
         ssnprintf(__G->log_file_spec, MAXLEN - 1, "/tmp/%s_lf_%s%s.log", user,
                   time_s, tz_buf);
-        __G->log_fd = open(__G->log_file_spec, O_WRONLY | O_CREAT | O_APPEND, 0o0644);
+        __G->log_fd = open(__G->log_file_spec, O_WRONLY | O_CREAT | O_APPEND, 0644);
         if (__G->log_fd == -1) {
             ssnprintf(em0, MAXLEN - 1, _("Failed to open log file: %s"),
                       __G->log_file_spec);
