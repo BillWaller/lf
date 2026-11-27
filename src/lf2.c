@@ -1,4 +1,4 @@
-/** @file lf.c
+/** @file lf4.c
     @v0.3.3
     @brief list files based on matching criteria
     @author Bill Waller
@@ -108,6 +108,8 @@ char *perms_p;
 char *debug_p;
 char *log_p;
 static size_t path_data_alloc(GlobalContext *__G, const char *path, size_t len);
+static inline uint32_t node_alloc(GlobalContext *__G);
+static inline void node_free(GlobalContext *__G, uint32_t idx);
 unsigned char const lf_type_mask[15] = {
     0, 0b00000001, 0b00000010, 0, 0b00000100, 0, 0b00001000, 0,
     0b00010000, 0, 0b00100000, 0, 0b01000000, 0, 0b10000000};
@@ -867,20 +869,20 @@ endlf:
 // GLOBAL ARENA
 // ----------------------------------------------------------------------
 bool global_arena_create(GlobalContext *__G) {
-    __G->queue_bytes = sizeof(QueueNode) * QUEUE_NODES;
-    __G->path_bytes = 32 * QUEUE_NODES;
-    __G->arena_bytes = (__G->queue_bytes + __G->path_bytes);
-    __G->arena = mmap(NULL, __G->arena_bytes, PROT_NONE,
+    __G->arena_bytes = sizeof(QueueNode) * QUEUE_NODES;
+    __G->arena = mmap(NULL, __G->arena_bytes, PROT_READ | PROT_WRITE,
                       MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-    mprotect(__G->arena, __G->arena_bytes, PROT_READ | PROT_WRITE);
-    if (!__G->arena || __G->arena == MAP_FAILED) {
+    if (__G->arena == MAP_FAILED) {
         perror(_("mmap failed to reserve queue arena memory"));
         return false;
     }
     __G->queue = (QueueNode *)__G->arena;
-    __G->path_data = (char *)__G->arena + __G->queue_bytes;
-    for (size_t i = 0; i < QUEUE_NODES; i++)
-        atomic_init(&__G->sequence[i], i);
+    for (size_t i = 0; i < QUEUE_NODES; i++) {
+        atomic_init(&__G->ring[i].sequence, i);
+        __G->queue[i].next_free = (uint32_t)(i + 1);
+    }
+    __G->queue[QUEUE_NODES - 1].next_free = INVALID_NODE;
+    atomic_init(&__G->free_head, 0);
     return true;
 }
 /** @brief Push the root directory node into the queue arena.
@@ -897,16 +899,18 @@ bool global_arena_create(GlobalContext *__G) {
    establish the starting point for traversal.
    */
 void push_root_node(GlobalContext *__G, dev_t dev, ino_t ino) {
+    uint32_t root_idx = node_alloc(__G);
     QueueNode root_node = {
         .parent_idx = NO_PARENT,
-        .path_offset = 0,
-        .path_len = strlen(__G->base_path),
-        .child_dirs_remaining = 0,
+        .child_dirs_remaining = 1,
         .depth = 0,
         .dev = dev,
+        .name_len = strlen(__G->base_path),
         .ino = ino,
     };
-    __G->queue_idx = 0;
+    memcpy(root_node.name, __G->base_path, root_node.name_len);
+    atomic_init(&__G->queue[0].child_dirs_remaining, 1);
+    __G->queue_idx = root_idx;
     atomic_init(&__G->active_tasks, 1);
     mpmc_enqueue(__G, &root_node, __G->base_path, strlen(__G->base_path));
     return;
@@ -929,13 +933,13 @@ void global_arena_destroy(GlobalContext *__G) {
    multiple threads. After flushing, it resets the length of the output_buffer
    to zero.
    */
-void flush_output_buffer(GlobalContext *__G, OutputBuffer *output_buffer) {
-    if (__G == nullptr || output_buffer == nullptr, output_buffer->len == 0)
+void flush_output_buffer(GlobalContext *__G, ThreadLocal *__tl) {
+    if (__G == nullptr || __tl->output_buffer == nullptr || __tl->output_buffer->len == 0)
         return;
     pthread_mutex_lock(&__G->output_mutex);
-    fwrite_unlocked(output_buffer->data, 1, output_buffer->len, stdout);
+    fwrite_unlocked(__tl->output_buffer->data, 1, __tl->output_buffer->len, stdout);
     pthread_mutex_unlock(&__G->output_mutex);
-    output_buffer->len = 0;
+    __tl->output_buffer->len = 0;
 }
 // ----------------------------------------------------------------------
 // APPEND_OUTPUT_BUFFER
@@ -955,9 +959,9 @@ void flush_output_buffer(GlobalContext *__G, OutputBuffer *output_buffer) {
    fit in the buffer, it prints it directly to stdout. The function uses a mutex
    to ensure thread-safe access to stdout when printing directly.
    */
-bool append_output_buffer(GlobalContext *__G, OutputBuffer *output_buffer, const char *path,
+bool append_output_buffer(GlobalContext *__G, ThreadLocal *__tl, const char *path,
                           size_t path_len, bool append_slash) {
-    if (__G == nullptr || output_buffer == nullptr || path == nullptr)
+    if (__G == nullptr || __tl->output_buffer == nullptr || path == nullptr)
         return false;
     size_t line_len = path_len + (append_slash ? 1 : 0) + 1;
     if (line_len > sizeof(OutputBuffer)) {
@@ -969,25 +973,61 @@ bool append_output_buffer(GlobalContext *__G, OutputBuffer *output_buffer, const
         pthread_mutex_unlock(&__G->output_mutex);
         return true;
     }
-    if (output_buffer->len + line_len > sizeof(output_buffer->data))
-        flush_output_buffer(__G, output_buffer);
-    memcpy(output_buffer->data + output_buffer->len, path, path_len);
-    output_buffer->len += path_len;
+    if (__tl->output_buffer->len + line_len > sizeof(__tl->output_buffer->data))
+        flush_output_buffer(__G, __tl);
+    memcpy(__tl->output_buffer->data + __tl->output_buffer->len, path, path_len);
+    __tl->output_buffer->len += path_len;
     if (append_slash)
-        output_buffer->data[output_buffer->len++] = '/';
-    output_buffer->data[output_buffer->len++] = '\n';
+        __tl->output_buffer->data[__tl->output_buffer->len++] = '/';
+    __tl->output_buffer->data[__tl->output_buffer->len++] = '\n';
     return true;
 }
 // ----------------------------------------------------------------------
 // VYUKOV MPMC QUEUE
 // ----------------------------------------------------------------------
+static inline uint32_t node_alloc(GlobalContext *__G) {
+    uint64_t head = atomic_load_explicit(&__G->free_head, memory_order_acquire);
+    while (true) {
+        uint32_t idx = (uint32_t)head;
+        if (idx == INVALID_NODE) {
+            return INVALID_NODE; // Pool exhausted
+        }
+        uint32_t next = __G->queue[idx].next_free;
+        uint64_t tag = (head >> 32) + 1;
+        uint64_t new_head = (tag << 32) | next;
+        if (atomic_compare_exchange_weak_explicit(
+                &__G->free_head, &head, new_head,
+                memory_order_acquire, memory_order_relaxed)) {
+            return idx;
+        }
+#if defined(__x86_64__)
+        __builtin_ia32_pause();
+#endif
+    }
+}
+static inline void node_free(GlobalContext *__G, uint32_t idx) {
+    uint64_t head = atomic_load_explicit(&__G->free_head, memory_order_relaxed);
+    while (true) {
+        __G->queue[idx].next_free = (uint32_t)head;
+        uint64_t tag = (head >> 32) + 1;
+        uint64_t new_head = (tag << 32) | idx;
+        if (atomic_compare_exchange_weak_explicit(
+                &__G->free_head, &head, new_head,
+                memory_order_release, memory_order_relaxed)) {
+            return;
+        }
+#if defined(__x86_64__)
+        __builtin_ia32_pause();
+#endif
+    }
+}
 bool mpmc_enqueue(GlobalContext *__G, QueueNode *node, const char *path, size_t len) {
-    size_t pos = atomic_load_explicit(&__G->enqueue_pos, memory_order_relaxed);
+    uint32_t pos = atomic_load_explicit(&__G->enqueue_pos, memory_order_relaxed);
     int spin_count = 0;
     const int SPIN_LIMIT = 8;
     while (true) {
-        size_t seq = atomic_load_explicit(&__G->sequence[pos & QUEUE_MASK],
-                                          memory_order_acquire);
+        uint32_t seq = atomic_load_explicit(&__G->ring[pos & QUEUE_MASK].sequence,
+                                            memory_order_acquire);
         intptr_t diff = (intptr_t)seq - (intptr_t)pos;
         if (diff == 0) { // Success
             if (atomic_compare_exchange_weak_explicit(&__G->enqueue_pos, &pos,
@@ -1013,128 +1053,97 @@ bool mpmc_enqueue(GlobalContext *__G, QueueNode *node, const char *path, size_t 
 #endif
     }
     __G->queue[pos] = *node;
-    uint32_t offset = atomic_fetch_add_explicit(&__G->path_offset, len + 1, memory_order_acquire);
-    memcpy(&__G->path_data[offset], path, len);
-    atomic_store_explicit(&__G->sequence[pos],
+    memcpy(&__G->queue[pos].name, path, len);
+    atomic_store_explicit(&__G->ring[pos].sequence,
                           pos + 1, memory_order_release);
     atomic_thread_fence(memory_order_release);
     return true;
 }
 bool mpmc_bulk_enqueue(GlobalContext *__G, ThreadLocal *__tl) {
-    if (__tl->stage_idx == 0)
+    uint32_t count = __tl->stage_idx;
+    if (count == 0) {
         return true;
-    uint_fast32_t spin_count = 0;
-    uint_fast32_t base_idx = atomic_load_explicit(&__G->enqueue_pos, memory_order_relaxed);
-    while (true) {
-        bool block_available = true;
-        bool queue_full = false;
-        uint_fast32_t i;
-        uint_fast32_t pos;
-        uint_fast32_t seq;
-        uint_fast32_t queue_idx;
-        for (i = 0; i < __tl->stage_idx; ++i) {
-            pos = base_idx + i;
-            queue_idx = pos & QUEUE_MASK;
-            seq = atomic_load_explicit(&__G->sequence[queue_idx], memory_order_acquire);
-            intptr_t dif = (intptr_t)seq - (intptr_t)pos;
-            if (dif < 0) {
-                // Slot is still occupied from the previous lap -> genuinely full
-                block_available = false;
-                queue_full = true;
-                break;
-            } else if (dif > 0) {
-                // Another producer already claimed this slot -> base_idx is stale
-                block_available = false;
-                break;
-            }
-        }
-        if (queue_full) {
-            return false; // Caller should fall back to local stack or single enqueue
-        }
-        if (block_available) { // Success
-            if (atomic_compare_exchange_weak_explicit(
-                    &__G->enqueue_pos, &base_idx, base_idx + __tl->stage_idx,
-                    memory_order_relaxed, memory_order_relaxed)) {
-                break; // Reservation finalized; base_idx holds our starting position
-            }
-            // CAS failed: base_idx was automatically updated with the current enqueue_pos
-        } else {
-            // dif > 0: Reload fresh base_idx before backing off/retrying
-            base_idx = atomic_load_explicit(&__G->enqueue_pos, memory_order_relaxed);
-        }
-        if (++spin_count < 64) {
-            for (i = 0; i < spin_count; i++) {
-#if defined(__x86_64__)
-                __builtin_ia32_pause();
-#endif
-            }
-        } else {
-            sched_yield();
-        }
     }
-    for (uint_fast32_t sidx = 0; sidx < __tl->stage_idx; ++sidx) {
-        uint_fast32_t enqueue_pos = (base_idx + sidx) & QUEUE_MASK;
-        __G->queue[enqueue_pos] = __tl->stage_node[sidx];
-        uint_fast32_t len_to_add = __tl->stage_node[sidx].path_len + 1;
-        uint_fast32_t offset = atomic_fetch_add_explicit(&__G->path_offset,
-                                                         len_to_add, memory_order_acquire);
-        if (__builtin_expect(offset + len_to_add >= PATH_BYTES, 0)) {
-            fprintf(stderr, "Fatal: Path arena exhausted (%lu / %d bytes)\n", offset + len_to_add, PATH_BYTES);
+    uint32_t allocated_indices[STAGE_NODES];
+    // 1. Allocate 'count' free QueueNodes and populate them before publishing
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t idx = node_alloc(__G);
+        if (idx == INVALID_NODE) {
+            for (uint32_t j = 0; j < i; j++)
+                node_free(__G, allocated_indices[j]);
             return false;
         }
-        memcpy(&__G->path_data[offset],
-               &__tl->path_data[__tl->stage_node[sidx].path_offset],
-               __tl->stage_node[sidx].path_len);
-#ifdef DEBUGZ
-        char *path = &__tl->path_data[__tl->stage_node[sidx].path_offset];
-        fprintf(stderr, "line: %d, %s, enqueued pos %lu, sidx %lu, path: %s\n", __LINE__, __func__, enqueue_pos, sidx, path);
-#endif
-        __G->queue[enqueue_pos].path_offset = offset;
-        __G->path_data[offset + __tl->stage_node[sidx].path_len] = '\0';
-        // ANNOTATE_HAPPENS_BEFORE(&__G->queue[enqueue_pos]);
-        // forces unconditional atomic read-write that Helgrind can't
-        // misinterpret
-        uint_fast32_t target_seq = base_idx + sidx + 1;
-        atomic_exchange_explicit(&__G->sequence[enqueue_pos],
-                                 target_seq, memory_order_release);
+        allocated_indices[i] = idx;
+        QueueNode *dst = &__G->queue[idx];
+        *dst = __tl->stage[i];
+        atomic_init(&__G->queue[idx].child_dirs_remaining, 1); // 1 = directory itself is active
     }
-    __tl->stage_idx = 0;
-    __tl->cum_path_offset = 0;
-    __tl->path_data[0] = '\0';
+    // 2. Publish the allocated node indices into the MPMC ring buffer
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t pos = atomic_load_explicit(&__G->enqueue_pos, memory_order_relaxed);
+        while (true) {
+            RingSlot *slot = &__G->ring[pos & QUEUE_MASK];
+            uint32_t seq = atomic_load_explicit(&slot->sequence, memory_order_acquire);
+            intptr_t diff = (intptr_t)seq - (intptr_t)pos;
+            if (diff == 0) {
+                if (atomic_compare_exchange_weak_explicit(
+                        &__G->enqueue_pos, &pos, pos + 1,
+                        memory_order_relaxed, memory_order_relaxed)) {
+                    slot->node_idx = allocated_indices[i];
+                    atomic_store_explicit(&slot->sequence, pos + 1, memory_order_release);
+                    break;
+                }
+            } else if (diff < 0) {
+                // Ring is temporarily full (unlikely since QUEUE_NODES == pool size)
+#if defined(__x86_64__)
+                __builtin_ia32_pause();
+#else
+                sched_yield();
+#endif
+                pos = atomic_load_explicit(&__G->enqueue_pos, memory_order_relaxed);
+            } else {
+                pos = atomic_load_explicit(&__G->enqueue_pos, memory_order_relaxed);
+            }
+        }
+    }
+
     return true;
 }
-bool mpmc_dequeue(GlobalContext *__G, uint_fast32_t *dequeue_pos) {
-    alignas(CACHE_LINE_SIZE) uint_fast32_t pos = atomic_load_explicit(&__G->dequeue_pos, memory_order_relaxed);
+bool mpmc_dequeue(GlobalContext *__G, uint32_t *out_node_idx) {
+    uint32_t pos = atomic_load_explicit(&__G->dequeue_pos, memory_order_relaxed);
     int spin_count = 0;
+
     while (true) {
         if (atomic_load_explicit(&__G->shut_down, memory_order_acquire)) {
             ANNOTATE_HAPPENS_AFTER(&__G->shut_down);
             return false;
         }
-        alignas(CACHE_LINE_SIZE) uint_fast32_t seq = __G->sequence[pos & QUEUE_MASK];
+
+        RingSlot *slot = &__G->ring[pos & QUEUE_MASK];
+        uint32_t seq = atomic_load_explicit(&slot->sequence, memory_order_acquire);
         intptr_t diff = (intptr_t)seq - (intptr_t)(pos + 1);
-        if (diff == 0) { // Catch!
-            if (atomic_compare_exchange_weak_explicit(&__G->dequeue_pos, &pos,
-                                                      pos + 1, memory_order_acquire, memory_order_relaxed)) {
-                ANNOTATE_HAPPENS_AFTER(&__G->sequence[pos & QUEUE_MASK]);
-                *dequeue_pos = pos;
-                break;
+
+        if (diff == 0) {
+            if (atomic_compare_exchange_weak_explicit(
+                    &__G->dequeue_pos, &pos, pos + 1,
+                    memory_order_acquire, memory_order_relaxed)) {
+                // Read the 32-bit node index and release the ring slot immediately
+                // *out_node_idx = slot->node_idx;
+                // atomic_store_explicit(&slot->sequence, pos + QUEUE_NODES,
+                // memory_order_release);
+                *out_node_idx = __G->ring[pos & QUEUE_MASK].node_idx;
+                atomic_store_explicit(&__G->ring[pos & QUEUE_MASK].sequence, pos + QUEUE_NODES, memory_order_release);
+                return true;
             }
             spin_count = 0;
-        } else if (diff < 0) { // No Joy!
+        } else if (diff < 0) {
             if (atomic_load_explicit(&__G->active_tasks, memory_order_acquire) == 0) {
-                uint_fast32_t check_pos =
-                    atomic_load_explicit(&__G->dequeue_pos, memory_order_acquire);
-
-                uint_fast32_t enq_pos = atomic_load_explicit(&__G->enqueue_pos, memory_order_acquire);
-                if (enq_pos == check_pos) {
-                    uint_fast32_t check_seq = atomic_load_explicit(
-                        &__G->sequence[check_pos & QUEUE_MASK], memory_order_acquire);
-                    if ((intptr_t)check_seq - (intptr_t)(check_pos + 1) < 0) {
-                        atomic_exchange_explicit(&__G->shut_down, 1,
-                                                 memory_order_release);
-                        return false;
-                    }
+                uint32_t check_pos = atomic_load_explicit(&__G->dequeue_pos, memory_order_acquire);
+                uint32_t check_seq = atomic_load_explicit(
+                    &__G->ring[check_pos & QUEUE_MASK].sequence, memory_order_acquire);
+                if ((intptr_t)check_seq - (intptr_t)(check_pos + 1) < 0) {
+                    atomic_exchange_explicit(&__G->shut_down, 1, memory_order_release);
+                    return false;
                 }
             }
             if (++spin_count < 64) {
@@ -1148,22 +1157,13 @@ bool mpmc_dequeue(GlobalContext *__G, uint_fast32_t *dequeue_pos) {
             }
             pos = atomic_load_explicit(&__G->dequeue_pos, memory_order_acquire);
         } else {
-            // Snatched by another thread, try again
             pos = atomic_load_explicit(&__G->dequeue_pos, memory_order_acquire);
         }
-        *dequeue_pos = pos;
     }
-#ifdef DEBUGX
-    fprintf(stderr, "line: %d, %s, dequeued pos %lu\n", __LINE__, __func__, *dequeue_pos);
-#endif
-    // atomic_store_explicit(&__G->sequence[pos & QUEUE_MASK],
-    //                       pos + QUEUE_NODES, memory_order_release);
-    uint_fast32_t reset_seq = pos + QUEUE_NODES;
-    atomic_exchange_explicit(&__G->sequence[pos & QUEUE_MASK], reset_seq, memory_order_release);
-    return true;
 }
-static inline void mpmc_release_slot(GlobalContext *__G, uint_fast32_t pos) {
-    atomic_store_explicit(&__G->sequence[pos & QUEUE_MASK],
+
+static inline void mpmc_release_slot(GlobalContext *__G, uint32_t pos) {
+    atomic_store_explicit(&__G->ring[pos & QUEUE_MASK].sequence,
                           pos + QUEUE_NODES, memory_order_release);
     // mpmc_release_slot(__G, pos);
 }
@@ -1173,16 +1173,10 @@ static inline void mpmc_release_slot(GlobalContext *__G, uint_fast32_t pos) {
 void *worker(void *arg) {
     GlobalContext *__G = (GlobalContext *)arg;
     ThreadLocal __tl;
-    __tl.stage_queue_size = sizeof(QueueNode) * STAGE_NODES;
-    __tl.stage_path_size = 32 * STAGE_NODES;
-    __tl.stage_arena_size = (__tl.stage_queue_size + __tl.stage_path_size);
-    void *stage_arena = mmap(NULL, __tl.stage_arena_size, PROT_NONE,
-                             MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-    mprotect(stage_arena, __tl.stage_arena_size, PROT_READ | PROT_WRITE);
+    __tl.stage_arena_size = sizeof(QueueNode) * STAGE_NODES;
+    void *stage_arena = mmap(NULL, __tl.stage_arena_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     __tl.stage_arena = stage_arena;
-    __tl.stage_node = (QueueNode *)__tl.stage_arena;
-    __tl.path_data = (char *)__tl.stage_arena + __tl.stage_queue_size;
-    __tl.cum_path_offset = 0;
+    __tl.stage = (QueueNode *)__tl.stage_arena;
     __tl.stage_idx = 0;
     __tl.thread_id = atomic_fetch_add_explicit(&__G->thread_id, 1, memory_order_relaxed);
     char dir_buf[DIR_BUF_SIZE];
@@ -1190,7 +1184,9 @@ void *worker(void *arg) {
     OutputBuffer output_buffer;
     __tl.output_buffer = &output_buffer;
     __tl.output_buffer->len = 0;
-    uint_fast32_t q_pos = 0;
+    uint32_t q_pos = 0;
+    char path[MAX_PATH_LEN];
+    __tl.path = path;
     LogCtx log_ctx = {};
     __tl.log_ctx = log_ctx;
     log_ctx.thread_id = __tl.thread_id;
@@ -1207,15 +1203,14 @@ void *worker(void *arg) {
         // Reconstruct the relative path for the dequeued directory node
         // ----------------------------------------------------------------
         __tl.queue_idx = q_pos;
-        uint_fast32_t q_path_len = __G->queue[q_pos].path_len;
-        uint_fast32_t q_path_offset = __G->queue[q_pos].path_offset;
+        uint32_t q_path_len = __G->queue[q_pos].name_len;
         // ----------------------------------------------------------------
         // Get the length of the parent path
         // ----------------------------------------------------------------
-        uint_fast32_t cum_path_len = q_path_len; // length of dequeued dir_node path
-        uint_fast32_t parent_idx = __G->queue[q_pos].parent_idx;
+        uint32_t cum_path_len = __G->queue[q_pos].name_len;
+        uint32_t parent_idx = __G->queue[q_pos].parent_idx;
         while (parent_idx != NO_PARENT) {
-            cum_path_len += __G->queue[parent_idx].path_len + 1;
+            cum_path_len += __G->queue[parent_idx].name_len + 1;
             parent_idx = __G->queue[parent_idx].parent_idx;
         }
         if (cum_path_len >= MAX_PATH_LEN) {
@@ -1225,30 +1220,27 @@ void *worker(void *arg) {
         // ----------------------------------------------------------------
         // Reconstruct the relative path for the dequeued directory node
         // ----------------------------------------------------------------
-        uint_fast32_t write_cursor = cum_path_len;
-        write_cursor -= q_path_len;
+        uint32_t write_cursor = cum_path_len;
+        write_cursor -= __G->queue[q_pos].name_len;
         memcpy(&__tl.path[write_cursor],
-               &__G->path_data[q_path_offset],
-               q_path_len);
+               &__G->queue[q_pos].name, __G->queue[q_pos].name_len);
         __tl.path[cum_path_len] = '\0';
 #ifdef DEBUGX
         fprintf(stderr, "line: %d, %s, T%lu, dequeued path %s\n", __LINE__, __func__, __tl.thread_id, __tl.path);
 #endif
         parent_idx = __G->queue[q_pos].parent_idx;
-        uint_fast32_t p_path_len;
-        uint_fast32_t p_path_offset;
+        uint32_t p_path_len;
         while (parent_idx != NO_PARENT) {
             write_cursor -= 1;
             __tl.path[write_cursor] = '/';
-            p_path_len = __G->queue[parent_idx].path_len;
-            p_path_offset = __G->queue[parent_idx].path_offset;
-            write_cursor -= p_path_len;
+            __tl.path_len = __G->queue[parent_idx].name_len;
+            write_cursor -= __tl.path_len;
             memcpy(&__tl.path[write_cursor],
-                   &__G->path_data[p_path_offset],
-                   p_path_len);
+                   &__G->queue[parent_idx].name,
+                   __G->queue[parent_idx].name_len);
             parent_idx = __G->queue[parent_idx].parent_idx;
         }
-#ifdef DEBUGY
+#ifdef DEBUGZ
         fprintf(stderr, "line: %d, %s, T%lu constructed path %s\n", __LINE__, __func__, __tl.thread_id, __tl.path);
 #endif
         __tl.parent_path_len = cum_path_len;
@@ -1256,10 +1248,34 @@ void *worker(void *arg) {
         // __tl->path_data now contains a relative path to the directory to open
         // ----------------------------------------------------------------
         finder(__G, &__tl);
+        release_directory_chain(__G, q_pos);
         atomic_fetch_sub_explicit(&__G->active_tasks, 1, memory_order_relaxed);
     }
     munmap(stage_arena, __tl.stage_arena_size);
     return NULL;
+}
+static inline void release_directory_chain(GlobalContext *__G, uint32_t q_pos) {
+    uint32_t curr = q_pos;
+    while (curr != NO_PARENT) {
+        // Atomically decrement and inspect the value BEFORE subtraction
+        uint32_t prev = atomic_fetch_sub_explicit(
+            &__G->queue[curr].child_dirs_remaining,
+            1,
+            memory_order_acq_rel);
+        if (prev == 1) {
+            // Count just hit 0: no children remain and this directory is finished.
+            // Read parent_idx BEFORE releasing the slot to a producer!
+            uint32_t parent = __G->queue[curr].parent_idx;
+            node_free(__G, curr);
+            // Publish slot as free for the next lap (curr + QUEUE_NODES)
+            // atomic_store_explicit(&__G->ring[curr].sequence, curr +
+            // QUEUE_NODES, memory_order_release);
+            curr = parent; // Walk up to parent and decrement its child count
+        } else {
+            // Other children (or the directory's own scan) are still active
+            break;
+        }
+    }
 }
 // ----------------------------------------------------------------------
 // FINDER
@@ -1274,7 +1290,6 @@ void *finder(GlobalContext *__G, ThreadLocal *__tl) {
     int rc;
     LogCtx *log_ctx = &__tl->log_ctx;
     __tl->stage_idx = 0;
-    __tl->stage_node->path_offset = 0;
     struct open_how how = {
         .flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC,
         .mode = 0};
@@ -1289,7 +1304,7 @@ void *finder(GlobalContext *__G, ThreadLocal *__tl) {
             lf_log(ERROR, "OPEN_FAIL,%s,%s", __tl->path, strerror(errno));
         } else
             fprintf(stderr, "OPEN_FAIL,%s,%d:%s\n", __tl->path, errno, strerror(errno));
-        flush_output_buffer(__G, __tl->output_buffer);
+        flush_output_buffer(__G, __tl);
         return NULL;
     }
     while (1) {
@@ -1302,7 +1317,7 @@ void *finder(GlobalContext *__G, ThreadLocal *__tl) {
         }
         if (nread == 0)
             break;
-        for (uint_fast32_t bpos = 0; bpos < (size_t)nread;) {
+        for (uint32_t bpos = 0; bpos < (size_t)nread;) {
             entry = (struct linux_dirent64 *)(__tl->dir_buf + bpos);
             bpos += entry->d_reclen;
 #ifdef DEBUGT
@@ -1401,7 +1416,7 @@ void *finder(GlobalContext *__G, ThreadLocal *__tl) {
                         }
                     }
                     // CYCLE Backtrack verification
-                    uint_fast32_t current_parent_idx = __tl->queue_idx;
+                    uint32_t current_parent_idx = __tl->queue_idx;
                     while (current_parent_idx != NO_PARENT) {
                         QueueNode *ancestor = &__G->queue[current_parent_idx];
                         if (effective_dev == ancestor->dev &&
@@ -1422,36 +1437,21 @@ void *finder(GlobalContext *__G, ThreadLocal *__tl) {
                 // ----------------------------------------------------------------
                 // STAGE BUFFERING
                 // ----------------------------------------------------------------
-                if ((__tl->stage_idx >= STAGE_NODES - 1) ||
-                    __tl->cum_path_offset >= STAGE_PATH_BYTES - MAX_PATH_LEN) {
-                    atomic_fetch_add_explicit(&__G->active_tasks, __tl->stage_idx, memory_order_relaxed);
-                    if (mpmc_bulk_enqueue(__G, __tl) == false) {
-                        atomic_fetch_sub_explicit(&__G->active_tasks, __tl->stage_idx, memory_order_relaxed);
-                        atomic_fetch_add_explicit(&__G->error_count, 1, memory_order_relaxed);
-                        if (__G->f_logging)
-                            lf_log(ERROR, "STAGE_ENQUEUE_FAIL,%s\n",
-                                   __tl->path);
-                        return NULL;
-                    }
-                    __tl->stage_idx = 0;
-                }
+                if (__tl->stage_idx >= STAGE_NODES - 1)
+                    flush_stage_buffer(__G, __tl);
                 __tl->d_name = entry->d_name;
 #ifdef DEBUGT
                 fprintf(stderr, "line: %d, %s, T%lu, path %s, d_name %s, tl->stage_idx %lu\n", __LINE__, __func__, __tl->thread_id, __tl->path, entry->d_name, __tl->stage_idx);
 #endif
-                QueueNode *stage_node = &__tl->stage_node[__tl->stage_idx];
-                stage_node->parent_idx = __tl->queue_idx;
-                stage_node->path_offset = __tl->cum_path_offset;
-                stage_node->path_len = __tl->d_name_len;
-                stage_node->child_dirs_remaining = 0;
-                stage_node->depth = __tl->depth;
-                stage_node->dev = effective_dev;
-                stage_node->ino = effective_ino;
-                memcpy(__tl->path_data + stage_node->path_offset,
-                       __tl->d_name,
-                       __tl->d_name_len);
-                __tl->cum_path_offset += __tl->d_name_len;
-                __tl->path_data[__tl->cum_path_offset++] = '\0';
+                QueueNode *stage = &__tl->stage[__tl->stage_idx];
+                stage->parent_idx = __tl->queue_idx;
+                stage->depth = __tl->depth;
+                stage->child_dirs_remaining = 1;
+                stage->dev = effective_dev;
+                stage->ino = effective_ino;
+                stage->name_len = __tl->d_name_len;
+                memcpy(stage->name, __tl->d_name, __tl->d_name_len);
+                stage->name[__tl->d_name_len] = '\0';
                 __tl->stage_idx++;
                 // --------------------------------------------------------
                 // CONDITIONALLY PRINT AS DIRECTORY
@@ -1486,22 +1486,25 @@ void *finder(GlobalContext *__G, ThreadLocal *__tl) {
         }
     }
     close(dir_fd);
-    flush_output_buffer(__G, __tl->output_buffer);
-    if (__tl->stage_idx > 0) {
-        atomic_fetch_add_explicit(&__G->active_tasks, __tl->stage_idx, memory_order_relaxed);
-        if (mpmc_bulk_enqueue(__G, __tl) == false) {
-            atomic_fetch_sub_explicit(&__G->active_tasks, __tl->stage_idx, memory_order_relaxed);
-            atomic_fetch_add_explicit(&__G->error_count, 1,
-                                      memory_order_relaxed);
-            if (__G->f_logging)
-                lf_log(ERROR, "STAGE_ENQUEUE_FAIL,%s\n",
-                       __tl->path);
-            return NULL;
-        }
-        __tl->stage_idx = 0;
-    }
+    flush_output_buffer(__G, __tl);
+    if (__tl->stage_idx > 0)
+        flush_stage_buffer(__G, __tl);
     return NULL;
 }
+void flush_stage_buffer(GlobalContext *__G, ThreadLocal *__tl) {
+    LogCtx *log_ctx = &__tl->log_ctx;
+    atomic_fetch_add_explicit(&__G->active_tasks, __tl->stage_idx, memory_order_relaxed);
+    atomic_fetch_add_explicit(&__G->queue[__tl->queue_idx].child_dirs_remaining, __tl->stage_idx, memory_order_relaxed);
+    if (mpmc_bulk_enqueue(__G, __tl) == false) {
+        atomic_fetch_sub_explicit(&__G->queue[__tl->queue_idx].child_dirs_remaining, __tl->stage_idx, memory_order_relaxed);
+        atomic_fetch_sub_explicit(&__G->active_tasks, __tl->stage_idx, memory_order_relaxed);
+        atomic_fetch_add_explicit(&__G->error_count, 1, memory_order_relaxed);
+        if (__G->f_logging)
+            lf_log(ERROR, "STAGE_ENQUEUE_FAIL,%s\n", __tl->path);
+    }
+    __tl->stage_idx = 0;
+}
+
 void build_path(ThreadLocal *__tl, char *file_name) {
     __tl->path_len = __tl->parent_path_len;
     __tl->path[__tl->path_len++] = '/';
@@ -1585,7 +1588,7 @@ int print_file(GlobalContext *__G, ThreadLocal *__tl) {
                 path_len -= 2;
             }
             if (path_len > 0) {
-                append_output_buffer(__G, __tl->output_buffer, path, path_len,
+                append_output_buffer(__G, __tl, path, path_len,
                                      __tl->effective_type == DT_DIR);
             }
             break;
@@ -1832,7 +1835,7 @@ void log_open(GlobalContext *__G, LogCtx *log_ctx, size_t thread_id) {
         }
         ssnprintf(__G->log_file_spec, MAXLEN - 1, "/tmp/%s_lf_%s%s.log", user,
                   time_s, tz_buf);
-        __G->log_fd = open(__G->log_file_spec, O_WRONLY | O_CREAT | O_APPEND, 0644);
+        __G->log_fd = open(__G->log_file_spec, O_WRONLY | O_CREAT | O_APPEND, 0o0644);
         if (__G->log_fd == -1) {
             ssnprintf(em0, MAXLEN - 1, _("Failed to open log file: %s"),
                       __G->log_file_spec);

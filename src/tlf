@@ -1,4 +1,4 @@
-gdb -x gdbcmds -q --args ./lf4 -H -T1
+gdb -x gdbcmds -q --args ./lf4
 # ./lf -H /home/bill | wc -l
 # fd . -H -I /home/bill | wc -l
 # ./lf2 /tmp 'bill_ui_.*' -a 2026-10-08T10:18:00 -b 2026-10-08T10:22:00 

@@ -39,19 +39,16 @@ extern "C" {
 // #define MAX_PATH_LEN _POSIX_PATH_MAX
 #define MAX_THREADS 64
 #define MAX_DEPTH 64
-#define CACHE_LINE_SIZE 64
 #define STAGE_NODES 32
-#define STAGE_PATH_BYTES (STAGE_NODES * 1024)
 #define MAX_PATH_LEN PATH_MAX
 #define MAX_LOG_RECORD_LEN MAX_PATH_LEN
 #define DIR_BUF_SIZE 131072
-#define QUEUE_NODES (1024 * 1024)
+#define QUEUE_NODES (128 * 1024)
 #define INVALID_NODE UINT32_MAX
-#define PATH_BYTES (32 * 1024 * 1024)
 #define MAX_LOG_REC_LEN 1024
 #define MAX_LOG_SIZE (1024 * 1024)
-#define OUTPUT_BUFFER_BYTES (16 * MAX_PATH_LEN)
 #define QUEUE_MASK (QUEUE_NODES - 1)
+#define OUTPUT_BUF_SIZE (32 * MAX_PATH_LEN)
 // #define DEBUG_CHILD_STAGING
 #if defined(__has_c_attribute)
 #if __has_c_attribute(gnu::format)
@@ -307,15 +304,15 @@ typedef enum {
 // ---------------------------------------------------------------
 #define NO_PARENT UINT32_MAX
 typedef struct {
-    uint32_t parent_idx;                                            //   4
-    uint32_t depth;                                                 //   4
-    uint32_t next_free;                                             //   4
-    alignas(CACHE_LINE_SIZE) _Atomic uint32_t child_dirs_remaining; //   4
-    dev_t dev;                                                      //   8
-    ino_t ino;                                                      //   8
-    char name[NAME_MAX];                                            // 256
-    uint16_t name_len;                                              //   2
-} QueueNode;                                                        // 298 bytes total
+    alignas(64) _Atomic uint32_t next_free;            //   8
+    alignas(64) _Atomic uint32_t child_dirs_remaining; //   8
+    uint32_t parent_idx;                               //   4
+    uint32_t depth;                                    //   4
+    dev_t dev;                                         //   8
+    ino_t ino;                                         //   8
+    char name[NAME_MAX + 1];                           // 256
+    uint16_t name_len;                                 //   2
+} QueueNode;                                           // 384 bytes total
 typedef union {
     struct {
         uint32_t idx;
@@ -324,15 +321,15 @@ typedef union {
     uint64_t head;
 } FreeNode;
 typedef struct {
-    _Atomic uint32_t sequence;
+    alignas(64) _Atomic uint32_t sequence;
     uint32_t node_idx;
 } RingSlot;
 // ---------------------------------------------------------------
 // OUTPUT BUFFER
 // ---------------------------------------------------------------
 typedef struct {
-    char data[OUTPUT_BUFFER_BYTES];
     size_t len;
+    char data[OUTPUT_BUF_SIZE];
 } OutputBuffer;
 // ---------------------------------------------------------------
 // THREAD LOCAL
@@ -371,21 +368,23 @@ typedef struct {
 // ---------------------------------------------------------------
 typedef struct {
     void *arena;
-    alignas(CACHE_LINE_SIZE) QueueNode *queue;
-    alignas(CACHE_LINE_SIZE) char *path_data;
-    alignas(CACHE_LINE_SIZE) _Atomic uint32_t path_offset;
-    alignas(CACHE_LINE_SIZE) _Atomic uint32_t shut_down;
-    alignas(CACHE_LINE_SIZE) _Atomic uint32_t enqueue_pos;
-    alignas(CACHE_LINE_SIZE) _Atomic uint32_t dequeue_pos;
-    alignas(CACHE_LINE_SIZE) _Atomic uint32_t active_tasks;
-    alignas(CACHE_LINE_SIZE) _Atomic uint32_t queue_idx;
-    alignas(CACHE_LINE_SIZE) _Atomic uint32_t thread_id;
-    alignas(CACHE_LINE_SIZE) _Atomic uint64_t free_head;
-    alignas(CACHE_LINE_SIZE) RingSlot ring[QUEUE_NODES];
+    alignas(64) char *path_data;
+    alignas(64) _Atomic uint32_t path_offset;
+    alignas(64) _Atomic uint32_t shut_down;
+    alignas(64) _Atomic uint32_t active_tasks;
+    alignas(64) _Atomic uint32_t queue_idx;
+    alignas(64) _Atomic uint32_t thread_id;
+    alignas(64) _Atomic uint32_t enqueue_pos;
+    alignas(64) _Atomic uint32_t dequeue_pos;
+    alignas(64) RingSlot ring[QUEUE_NODES];
+    alignas(64) _Atomic uint64_t free_head;
+    alignas(64) QueueNode *queue;
+    alignas(64) _Atomic uint32_t work_epoch;
+    alignas(64) _Atomic uint32_t waiting_workers;
     size_t arena_bytes;
     size_t queue_bytes;
     size_t path_bytes;
-    pthread_mutex_t output_mutex;
+    // pthread_mutex_t output_mutex;
     _Atomic size_t file_count;
     _Atomic size_t error_count;
     _Atomic size_t log_error_count;

@@ -5,7 +5,7 @@ directory="/home/bill"
 
 a[0]="find $directory"
 a[1]="fd . -H -I $directory"
-a[2]="./lf -H $directory"
+a[3]="./lf -H $directory"
 PUT="./lf"
 
 red="[0;31m"

@@ -39,18 +39,16 @@ extern "C" {
 // #define MAX_PATH_LEN _POSIX_PATH_MAX
 #define MAX_THREADS 64
 #define MAX_DEPTH 64
-#define CACHE_LINE_SIZE 64
-#define STAGE_NODES 8
-#define STAGE_PATH_BYTES (STAGE_NODES * 1024)
+#define STAGE_NODES 32
 #define MAX_PATH_LEN PATH_MAX
 #define MAX_LOG_RECORD_LEN MAX_PATH_LEN
-#define DIR_BUF_SIZE 65536
-#define QUEUE_NODES (1024 * 1024)
-#define PATH_BYTES (32 * 1024 * 1024)
+#define DIR_BUF_SIZE (1 << 17)
+#define QUEUE_NODES (1 << 17)
+#define INVALID_NODE UINT32_MAX
 #define MAX_LOG_REC_LEN 1024
-#define MAX_LOG_SIZE (1024 * 1024)
-#define OUTPUT_BUFFER_BYTES (16 * MAX_PATH_LEN)
+#define MAX_LOG_SIZE (1 << 17)
 #define QUEUE_MASK (QUEUE_NODES - 1)
+#define OUTPUT_BUF_SIZE (32 * MAX_PATH_LEN)
 // #define DEBUG_CHILD_STAGING
 #if defined(__has_c_attribute)
 #if __has_c_attribute(gnu::format)
@@ -306,53 +304,145 @@ typedef enum {
 // ---------------------------------------------------------------
 #define NO_PARENT UINT32_MAX
 typedef struct {
-    uint_fast32_t parent_idx;           //   4
-    uint_fast32_t path_offset;          //   4
-    uint_fast32_t path_len;             //   4
-    uint_fast32_t child_dirs_remaining; //   4
-    uint_fast32_t depth;                //   4
-    dev_t dev;                          //   8
-    ino_t ino;                          //   8
-} QueueNode;                            //  36 bytes total
+    alignas(64) _Atomic uint32_t next_free;            //   8
+    alignas(64) _Atomic uint32_t child_dirs_remaining; //   8
+    uint32_t parent_idx;                               //   4
+    uint32_t depth;                                    //   4
+    dev_t dev;                                         //   8
+    ino_t ino;                                         //   8
+    char name[NAME_MAX + 1];                           // 256
+    uint16_t name_len;                                 //   2
+} QueueNode;                                           // 384 bytes total
+typedef union {
+    struct {
+        uint32_t idx;
+        uint32_t tag;
+    };
+    uint64_t head;
+} FreeNode;
+typedef struct {
+    alignas(64) _Atomic uint32_t sequence;
+    uint32_t node_idx;
+} RingSlot;
 // ---------------------------------------------------------------
 // OUTPUT BUFFER
 // ---------------------------------------------------------------
 typedef struct {
-    char data[OUTPUT_BUFFER_BYTES];
     size_t len;
+    char data[OUTPUT_BUF_SIZE];
 } OutputBuffer;
 // ---------------------------------------------------------------
 // THREAD LOCAL
 // ---------------------------------------------------------------
 typedef struct {
     void *stage_arena;
-    QueueNode *stage_node;
+    QueueNode *stage;
     char *path_data;
     size_t stage_arena_size;
     size_t stage_queue_size;
-    size_t stage_path_size;
+    size_t stage_name_size;
     OutputBuffer *output_buffer;
-    uint_fast32_t parent_idx;           //   4
-    uint_fast32_t path_offset;          //   4
-    uint_fast32_t path_len;             //   4
-    uint_fast32_t child_dirs_remaining; //   4
-    uint_fast32_t depth;                //   4
-    dev_t dev;                          //   8
-    ino_t ino;                          //   8
-    uint_fast32_t cum_path_offset;
-    uint_fast32_t queue_idx;
-    uint_fast32_t stage_idx;
-    uint_fast32_t thread_id;
-    uint_fast32_t parent_path_len;
-    uint_fast32_t d_name_len;
+    uint32_t parent_idx;           //   4
+    uint32_t name_len;             //   4
+    uint32_t child_dirs_remaining; //   4
+    uint32_t depth;                //   4
+    dev_t dev;                     //   8
+    ino_t ino;                     //   8
+    uint32_t cum_path_offset;
+    uint32_t queue_idx;
+    uint32_t stage_idx;
+    uint32_t thread_id;
+    uint32_t parent_path_len;
+    uint32_t d_name_len;
     char *d_name;
-    char path[MAX_PATH_LEN];
+    char *path;
+    uint32_t path_len;
     struct stat *cached_sb;
     bool stat_cached;
     unsigned char effective_type;
     char *dir_buf;
     LogCtx log_ctx;
 } ThreadLocal;
+// ---------------------------------------------------------------
+// GLOBAL LF CONTEXT
+// ---------------------------------------------------------------
+typedef struct {
+    void *arena;
+    alignas(64) char *path_data;
+    alignas(64) _Atomic uint32_t path_offset;
+    alignas(64) _Atomic uint32_t shut_down;
+    alignas(64) _Atomic uint32_t active_tasks;
+    alignas(64) _Atomic uint32_t queue_idx;
+    alignas(64) _Atomic uint32_t thread_id;
+    alignas(64) _Atomic uint32_t enqueue_pos;
+    alignas(64) _Atomic uint32_t dequeue_pos;
+    alignas(64) RingSlot ring[QUEUE_NODES];
+    alignas(64) _Atomic uint64_t free_head;
+    alignas(64) QueueNode *queue;
+    alignas(64) _Atomic uint32_t work_epoch;
+    alignas(64) _Atomic uint32_t waiting_workers;
+    size_t arena_bytes;
+    size_t queue_bytes;
+    size_t path_bytes;
+    // pthread_mutex_t output_mutex;
+    _Atomic size_t file_count;
+    _Atomic size_t error_count;
+    _Atomic size_t log_error_count;
+    pthread_t *threads;
+    unsigned int nthreads;
+    long start;
+    uintmax_t user_id;
+    char *user_name;
+    off_t file_size_min;
+    int err_fd;
+    int log_fd;
+    char log_file_spec[MAX_PATH_LEN];
+    long flags;
+    long start_nsec;
+    long start_sec;
+    long p_int_nsec;
+    long p_int_sec;
+    time_t after;
+    time_t before;
+    uint32_t max_depth;
+    int reg_flags;
+    char *base_path;
+    char *re;
+    char *ere;
+    char *sbuffer;
+    regex_t compiled_re;
+    regex_t compiled_ere;
+    unsigned char include_perms;
+    unsigned char include_types;
+    unsigned char suppress_types;
+    char log_record[MAX_LOG_RECORD_LEN];
+    bool f_logging;
+    bool unlink;
+    bool xdev;
+    bool depth_first;
+    bool ignore_case;
+    bool sort;
+    bool sort_reverse;
+    bool include_hidden;
+    bool hidden_only;
+    bool follow_links;
+    tss_e timestamp_style;
+    ll_e disp_level_mask;
+    ll_e file_level_mask;
+    bool only_errors;
+    bool count_errors;
+    bool count;
+    bool count_silently;
+} GlobalContext;
+// LOG LEVELS
+// 1-CONFIG, 2- INFO, 3-ERROR, 4-DEBUG, 5-CYCLE, 6-QUEUE, 7-ONLY_ERRORS,
+// 8-COUNT_ERRORS, 9-ALL, S-SPIN_COUNT, T-STAGE
+#define print_file_type(mask, lf_type, dt_type, name)                             \
+    {                                                                             \
+        fprintf(stderr, "%c %08b (%3d) %08b (%2d) %s\n",                          \
+                (mask & lf_type) ? '*' : ' ', lf_type, lf_type, dt_type, dt_type, \
+                name);                                                            \
+    }
 // ---------------------------------------------------------------
 // MEMORY USAGE STATISTICS
 // ---------------------------------------------------------------
@@ -373,84 +463,6 @@ typedef enum {
     TS_MATCH = 2,
     TS_MATCH_PLUS_ERROR = 3,
 } TerminationStatus;
-// ---------------------------------------------------------------
-// GLOBAL LF CONTEXT
-// ---------------------------------------------------------------
-typedef struct {
-    void *arena;
-    alignas(CACHE_LINE_SIZE) QueueNode *queue;
-    alignas(CACHE_LINE_SIZE) char *path_data;
-    alignas(CACHE_LINE_SIZE) atomic_uint_fast32_t path_offset;
-    alignas(CACHE_LINE_SIZE) atomic_uint_fast32_t shut_down;
-    alignas(CACHE_LINE_SIZE) atomic_uint_fast32_t enqueue_pos;
-    alignas(CACHE_LINE_SIZE) atomic_uint_fast32_t dequeue_pos;
-    alignas(CACHE_LINE_SIZE) atomic_uint_fast32_t active_tasks;
-    alignas(CACHE_LINE_SIZE) atomic_uint_fast32_t queue_idx;
-    alignas(CACHE_LINE_SIZE) atomic_uint_fast32_t thread_id;
-    alignas(CACHE_LINE_SIZE) atomic_uint_fast32_t sequence[QUEUE_NODES];
-    size_t arena_bytes;
-    size_t queue_bytes;
-    size_t path_bytes;
-    pthread_mutex_t output_mutex;
-    atomic_size_t error_count;
-    atomic_size_t log_error_count;
-    pthread_t *threads;
-    long start;
-    unsigned int nthreads;
-    atomic_size_t file_count;
-    uintmax_t user_id;
-    off_t file_size_min;
-    int err_fd;
-    int log_fd;
-    char log_file_spec[MAX_PATH_LEN];
-    long flags;
-    long start_nsec;
-    long start_sec;
-    long p_int_nsec;
-    long p_int_sec;
-    time_t after;
-    time_t before;
-    uint32_t max_depth;
-    int reg_flags;
-    char *base_path;
-    char *re;
-    char *ere;
-    char *user_name;
-    char *sbuffer;
-    regex_t compiled_re;
-    regex_t compiled_ere;
-    unsigned char include_perms;
-    unsigned char include_types;
-    unsigned char suppress_types;
-    char log_record[MAX_LOG_RECORD_LEN];
-    bool unlink;
-    bool xdev;
-    bool depth_first;
-    bool ignore_case;
-    bool sort;
-    bool sort_reverse;
-    bool include_hidden;
-    bool hidden_only;
-    bool follow_links;
-    tss_e timestamp_style;
-    bool f_logging;
-    ll_e disp_level_mask;
-    ll_e file_level_mask;
-    bool only_errors;
-    bool count_errors;
-    bool count;
-    bool count_silently;
-} GlobalContext;
-// LOG LEVELS
-// 1-CONFIG, 2- INFO, 3-ERROR, 4-DEBUG, 5-CYCLE, 6-QUEUE, 7-ONLY_ERRORS,
-// 8-COUNT_ERRORS, 9-ALL, S-SPIN_COUNT, T-STAGE
-#define print_file_type(mask, lf_type, dt_type, name)                             \
-    {                                                                             \
-        fprintf(stderr, "%c %08b (%3d) %08b (%2d) %s\n",                          \
-                (mask & lf_type) ? '*' : ' ', lf_type, lf_type, dt_type, dt_type, \
-                name);                                                            \
-    }
-
 // ---------------------------------------------------------------
 // FUNCTION PROTOTYPES
 // ---------------------------------------------------------------
@@ -479,21 +491,22 @@ void debug_out(GlobalContext *__G, int, char **);
 bool init_lf(GlobalContext *__G, int, char **);
 int sort_lf_output(GlobalContext *__G, int, char **);
 void *worker(void *arg);
-void *finder(GlobalContext *__G, ThreadLocal *tl);
-int print_file(GlobalContext *__G, ThreadLocal *tl);
-void flush_output_buffer(GlobalContext *, OutputBuffer *);
-bool append_output_buffer(GlobalContext *__G, OutputBuffer *output, const char *path, size_t path_len, bool append_slash);
+void *finder(GlobalContext *__G, ThreadLocal *__tl);
+int print_file(GlobalContext *__G, ThreadLocal *__tl);
+void flush_output_buffer(GlobalContext *, ThreadLocal *__tl);
+bool append_output_buffer(GlobalContext *__G, ThreadLocal *__tl, const char *path, size_t path_len, bool append_slash);
 void finalize_dir_node(GlobalContext *__G, size_t node_offset);
 bool global_arena_create(GlobalContext *__G);
 void global_arena_destroy(GlobalContext *__G);
+static inline void release_directory_chain(GlobalContext *__G, uint32_t q_pos);
 void push_root_node(GlobalContext *__G, dev_t dev, ino_t ino);
 bool mpmc_enqueue(GlobalContext *__G, QueueNode *node, const char *path, size_t len);
 bool mpmc_enqueue_staged(GlobalContext *, ThreadLocal *__tl);
 bool mpmc_bulk_enqueue(GlobalContext *__G, ThreadLocal *__tl);
-bool mpmc_dequeue(GlobalContext *__G, uint_fast32_t *dequeue_pos);
+bool mpmc_dequeue(GlobalContext *__G, uint32_t *dequeue_pos);
 char *path_data_init(GlobalContext *__G, LogCtx *log_ctx);
 void path_data_destroy(GlobalContext *__G);
-size_t flush_ch(GlobalContext *__G, ThreadLocal *tl);
+size_t flush_ch(GlobalContext *__G, ThreadLocal *__tl);
 void iso8601_timestamp(GlobalContext *__G, LogCtx *log_ctx);
 bool parse_local_timestamp(const char *s, time_t *out);
 char *format_local_timestamp(time_t t, char *buf, size_t n);
@@ -509,6 +522,7 @@ size_t strnz__cat(char *d, const char *s, size_t max_len);
 bool is_directory(const char *path);
 bool is_valid_regex(const char *pattern);
 void build_path(ThreadLocal *__tl, char *file_name);
+void flush_stage_buffer(GlobalContext *__G, ThreadLocal *__tl);
 // ---------------------------------------------------------------
 // LOGGING
 // ---------------------------------------------------------------

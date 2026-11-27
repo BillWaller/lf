@@ -126,7 +126,7 @@ clean:
 	   	CMakeCache.txt CMakefile CMAKE_BUILD_TYPE=Debug gdb.log
 
 helgrind:
-	valgrind --tool=helgrind --log-file=helgrind/helgrind.out -s ./lf4 -H
+	valgrind --tool=helgrind --log-file=helgrind/helgrind.out -s ./lf -H
 
 valgrind: lf
 	valgrind -v \

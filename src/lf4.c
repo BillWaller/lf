@@ -16,6 +16,7 @@
 #include <fcntl.h>
 #include <grp.h>
 #include <inttypes.h>
+#include <linux/futex.h>
 #include <linux/limits.h>
 #include <locale.h>
 #include <pthread.h>
@@ -110,6 +111,18 @@ char *log_p;
 static size_t path_data_alloc(GlobalContext *__G, const char *path, size_t len);
 static inline uint32_t node_alloc(GlobalContext *__G);
 static inline void node_free(GlobalContext *__G, uint32_t idx);
+
+static inline void futex_wait_epoch(GlobalContext *__G, uint32_t expected_epoch) {
+    syscall(SYS_futex, &__G->work_epoch, FUTEX_WAIT_PRIVATE, expected_epoch, NULL, NULL, 0);
+}
+
+static inline void futex_wake_workers(GlobalContext *__G, int count) {
+    atomic_fetch_add_explicit(&__G->work_epoch, 1, memory_order_release);
+    if (atomic_load_explicit(&__G->waiting_workers, memory_order_acquire) > 0) {
+        syscall(SYS_futex, &__G->work_epoch, FUTEX_WAKE_PRIVATE, count, NULL, NULL, 0);
+    }
+}
+
 unsigned char const lf_type_mask[15] = {
     0, 0b00000001, 0b00000010, 0, 0b00000100, 0, 0b00001000, 0,
     0b00010000, 0, 0b00100000, 0, 0b01000000, 0, 0b10000000};
@@ -779,9 +792,9 @@ bool init_lf(GlobalContext *__G, int argc, char **argv) {
     termination_status = TS_SUCCESS;
     int rc = 0;
     struct stat sb;
-    rc = pthread_mutex_init(&__G->output_mutex, NULL);
-    if (rc != 0)
-        perror(_("Mutex initialization failed"));
+    // rc = pthread_mutex_init(&__G->output_mutex, NULL);
+    // if (rc != 0)
+    //     perror(_("Mutex initialization failed"));
     rc = stat(__G->base_path, &sb);
     if (rc != 0)
         return false;
@@ -855,9 +868,9 @@ endlf:
         lf_log(INFO, "Waiting for threads to finish...");
     for (unsigned int i = 0; i < __G->nthreads; i++)
         pthread_join(__G->threads[i], NULL);
-    rc = pthread_mutex_destroy(&__G->output_mutex);
-    if (rc != 0)
-        perror(_("Mutex destroy failed"));
+    // rc = pthread_mutex_destroy(&__G->output_mutex);
+    // if (rc != 0)
+    //     perror(_("Mutex destroy failed"));
     if (__G->flags & LF_REGEX)
         regfree(&__G->compiled_re);
     if (__G->flags & LF_EXC_REGEX)
@@ -881,7 +894,8 @@ bool global_arena_create(GlobalContext *__G) {
         atomic_init(&__G->ring[i].sequence, i);
         __G->queue[i].next_free = (uint32_t)(i + 1);
     }
-    __G->queue[QUEUE_NODES - 1].next_free = INVALID_NODE;
+    atomic_init(&__G->queue[QUEUE_NODES - 1].next_free, INVALID_NODE);
+    // __G->queue[QUEUE_NODES - 1].next_free = INVALID_NODE;
     atomic_init(&__G->free_head, 0);
     return true;
 }
@@ -920,68 +934,59 @@ void global_arena_destroy(GlobalContext *__G) {
         return;
     munmap(__G->arena, __G->arena_bytes);
 }
-// ----------------------------------------------------------------------
-// FLUSH_OUTPUT_BUFFER
-// ----------------------------------------------------------------------
-/** @brief Flush the output_buffer to stdout in a thread-safe manner.
-    @param lf A pointer to the GlobalContext struct containing the output mutex.
-    @param output_buffer A pointer to the OutputBuffer struct containing the data to be
-   flushed.
-    @details This function writes the contents of the output_buffer to stdout
-   using fwrite_unlocked for efficiency. It uses a mutex to ensure that only one
-   thread can write to stdout at a time, preventing interleaved output from
-   multiple threads. After flushing, it resets the length of the output_buffer
-   to zero.
-   */
+static inline void write_all_stdout(const char *buf, size_t len) {
+    size_t written = 0;
+    while (written < len) {
+        ssize_t n = write(STDOUT_FILENO, buf + written, len - written);
+        if (__builtin_expect(n <= 0, 0)) {
+            if (n < 0 && errno == EINTR)
+                continue;
+            break;
+        }
+        written += (size_t)n;
+    }
+}
+
 void flush_output_buffer(GlobalContext *__G, ThreadLocal *__tl) {
-    if (__G == nullptr || __tl->output_buffer == nullptr || __tl->output_buffer->len == 0)
+    (void)__G;
+    if (__tl->output_buffer == nullptr || __tl->output_buffer->len == 0)
         return;
-    pthread_mutex_lock(&__G->output_mutex);
-    fwrite_unlocked(__tl->output_buffer->data, 1, __tl->output_buffer->len, stdout);
-    pthread_mutex_unlock(&__G->output_mutex);
+
+    // Direct write() to STDOUT_FILENO: zero user-space mutexes, zero glibc double-buffering!
+    // (If outputting to a slow TTY and you want strict line-group atomicity,
+    //  wrap ONLY write_all_stdout in __G->output_mutex.)
+    write_all_stdout(__tl->output_buffer->data, __tl->output_buffer->len);
     __tl->output_buffer->len = 0;
 }
-// ----------------------------------------------------------------------
-// APPEND_OUTPUT_BUFFER
-// ----------------------------------------------------------------------
-/** @brief Append a path to the output_buffer, flushing if necessary.
-    @param lf A pointer to the GlobalContext struct containing the output mutex.
-    @param output_buffer A pointer to the OutputBuffer struct where the path will be
-   appended.
-    @param path The path string to append to the output_buffer.
-    @param path_len The length of the path string.
-    @param append_slash A boolean indicating whether to append a slash after the
-   path.
-    @return true if the path was successfully appended or printed, false if an
-   error occurred (e.g., null pointers).
-    @details This function appends a given path to an output_buffer. If the
-   buffer is full, it flushes the buffer to stdout. If the path is too long to
-   fit in the buffer, it prints it directly to stdout. The function uses a mutex
-   to ensure thread-safe access to stdout when printing directly.
-   */
+
 bool append_output_buffer(GlobalContext *__G, ThreadLocal *__tl, const char *path,
                           size_t path_len, bool append_slash) {
-    if (__G == nullptr || __tl->output_buffer == nullptr || path == nullptr)
+    if (__tl->output_buffer == nullptr || path == nullptr)
         return false;
+
     size_t line_len = path_len + (append_slash ? 1 : 0) + 1;
-    if (line_len > sizeof(OutputBuffer)) {
-        pthread_mutex_lock(&__G->output_mutex);
-        fwrite_unlocked(path, 1, path_len, stdout);
+    if (__builtin_expect(line_len > sizeof(__tl->output_buffer->data), 0)) {
+        flush_output_buffer(__G, __tl);
+        write_all_stdout(path, path_len);
         if (append_slash)
-            fputc_unlocked('/', stdout);
-        fputc_unlocked('\n', stdout);
-        pthread_mutex_unlock(&__G->output_mutex);
+            write_all_stdout("/", 1);
+        write_all_stdout("\n", 1);
         return true;
     }
+
     if (__tl->output_buffer->len + line_len > sizeof(__tl->output_buffer->data))
         flush_output_buffer(__G, __tl);
-    memcpy(__tl->output_buffer->data + __tl->output_buffer->len, path, path_len);
-    __tl->output_buffer->len += path_len;
+
+    char *dst = __tl->output_buffer->data + __tl->output_buffer->len;
+    memcpy(dst, path, path_len);
+    dst += path_len;
     if (append_slash)
-        __tl->output_buffer->data[__tl->output_buffer->len++] = '/';
-    __tl->output_buffer->data[__tl->output_buffer->len++] = '\n';
+        *dst++ = '/';
+    *dst++ = '\n';
+    __tl->output_buffer->len += line_len;
     return true;
 }
+
 // ----------------------------------------------------------------------
 // VYUKOV MPMC QUEUE
 // ----------------------------------------------------------------------
@@ -992,7 +997,7 @@ static inline uint32_t node_alloc(GlobalContext *__G) {
         if (idx == INVALID_NODE) {
             return INVALID_NODE; // Pool exhausted
         }
-        uint32_t next = __G->queue[idx].next_free;
+        uint32_t next = atomic_load_explicit(&__G->queue[idx].next_free, memory_order_relaxed);
         uint64_t tag = (head >> 32) + 1;
         uint64_t new_head = (tag << 32) | next;
         if (atomic_compare_exchange_weak_explicit(
@@ -1008,7 +1013,7 @@ static inline uint32_t node_alloc(GlobalContext *__G) {
 static inline void node_free(GlobalContext *__G, uint32_t idx) {
     uint64_t head = atomic_load_explicit(&__G->free_head, memory_order_relaxed);
     while (true) {
-        __G->queue[idx].next_free = (uint32_t)head;
+        atomic_store_explicit(&__G->queue[idx].next_free, (uint32_t)head, memory_order_release);
         uint64_t tag = (head >> 32) + 1;
         uint64_t new_head = (tag << 32) | idx;
         if (atomic_compare_exchange_weak_explicit(
@@ -1074,8 +1079,13 @@ bool mpmc_bulk_enqueue(GlobalContext *__G, ThreadLocal *__tl) {
             return false;
         }
         allocated_indices[i] = idx;
-        QueueNode *dst = &__G->queue[idx];
-        *dst = __tl->stage[i];
+        __G->queue[idx].parent_idx = __tl->stage[i].parent_idx;
+        __G->queue[idx].depth = __tl->stage[i].depth;
+        __G->queue[idx].dev = __tl->stage[i].dev;
+        __G->queue[idx].ino = __tl->stage[i].ino;
+        __G->queue[idx].name_len = __tl->stage[i].name_len;
+        memcpy(__G->queue[idx].name, __tl->stage[i].name, __tl->stage[i].name_len + 1);
+        atomic_store_explicit(&__G->queue[idx].child_dirs_remaining, 1, memory_order_relaxed);
         atomic_init(&__G->queue[idx].child_dirs_remaining, 1); // 1 = directory itself is active
     }
     // 2. Publish the allocated node indices into the MPMC ring buffer
@@ -1106,7 +1116,7 @@ bool mpmc_bulk_enqueue(GlobalContext *__G, ThreadLocal *__tl) {
             }
         }
     }
-
+    futex_wake_workers(__G, (int)count);
     return true;
 }
 bool mpmc_dequeue(GlobalContext *__G, uint32_t *out_node_idx) {
@@ -1133,6 +1143,7 @@ bool mpmc_dequeue(GlobalContext *__G, uint32_t *out_node_idx) {
                 // memory_order_release);
                 *out_node_idx = __G->ring[pos & QUEUE_MASK].node_idx;
                 atomic_store_explicit(&__G->ring[pos & QUEUE_MASK].sequence, pos + QUEUE_NODES, memory_order_release);
+                futex_wake_workers(__G, INT32_MAX);
                 return true;
             }
             spin_count = 0;
@@ -1146,14 +1157,24 @@ bool mpmc_dequeue(GlobalContext *__G, uint32_t *out_node_idx) {
                     return false;
                 }
             }
-            if (++spin_count < 64) {
-                for (int i = 0; i < spin_count; i++) {
+
+            if (++spin_count < 256) {
 #if defined(__x86_64__)
-                    __builtin_ia32_pause();
+                __builtin_ia32_pause();
 #endif
-                }
             } else {
-                sched_yield();
+                uint32_t epoch = atomic_load_explicit(&__G->work_epoch, memory_order_acquire);
+                atomic_fetch_add_explicit(&__G->waiting_workers, 1, memory_order_acq_rel);
+
+                // Re-check shutdown and active_tasks AFTER incrementing waiting_workers
+                // to prevent a lost-wakeup deadlock!
+                if (!atomic_load_explicit(&__G->shut_down, memory_order_acquire) &&
+                    atomic_load_explicit(&__G->active_tasks, memory_order_acquire) > 0) {
+                    futex_wait_epoch(__G, epoch);
+                }
+
+                atomic_fetch_sub_explicit(&__G->waiting_workers, 1, memory_order_relaxed);
+                spin_count = 0;
             }
             pos = atomic_load_explicit(&__G->dequeue_pos, memory_order_acquire);
         } else {
@@ -1249,8 +1270,12 @@ void *worker(void *arg) {
         // ----------------------------------------------------------------
         finder(__G, &__tl);
         release_directory_chain(__G, q_pos);
-        atomic_fetch_sub_explicit(&__G->active_tasks, 1, memory_order_relaxed);
+        if (atomic_fetch_sub_explicit(&__G->active_tasks, 1, memory_order_acq_rel) == 1) {
+            atomic_store_explicit(&__G->shut_down, 1, memory_order_release);
+            futex_wake_workers(__G, INT32_MAX);
+        }
     }
+    flush_output_buffer(__G, &__tl);
     munmap(stage_arena, __tl.stage_arena_size);
     return NULL;
 }
@@ -1291,7 +1316,7 @@ void *finder(GlobalContext *__G, ThreadLocal *__tl) {
     LogCtx *log_ctx = &__tl->log_ctx;
     __tl->stage_idx = 0;
     struct open_how how = {
-        .flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC,
+        .flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOATIME,
         .mode = 0};
     how.resolve = RESOLVE_NO_MAGICLINKS;
     if (!__G->follow_links)
@@ -1299,6 +1324,10 @@ void *finder(GlobalContext *__G, ThreadLocal *__tl) {
     if (__G->xdev)
         how.resolve |= RESOLVE_NO_XDEV;
     int dir_fd = openat2(AT_FDCWD, __tl->path, &how, sizeof(struct open_how));
+    if (dir_fd == -1 && errno == 1) {
+        how.flags &= ~(O_NOATIME);
+        dir_fd = openat2(AT_FDCWD, __tl->path, &how, sizeof(struct open_how));
+    }
     if (dir_fd == -1) {
         if (__G->f_logging) {
             lf_log(ERROR, "OPEN_FAIL,%s,%s", __tl->path, strerror(errno));
