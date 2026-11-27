@@ -194,7 +194,7 @@ awk 'BEGIN {
             if ($0 == "" || $9 == "line" || $9 == "-----" || $9 == "") {
                 continue
             }
-            printf("%s %s\n", $9, $2)
+            printf("%s %s %s\n", $9, $2, $3)
         }
 }' $TMP_INTERNAL | sort -n | awk -f fh_errs.awk >$TMP_ERRS
 awk -f fh_conflict1.awk $TMP_PASS1 | sort -n | uniq >$TMP_CONFLICT1

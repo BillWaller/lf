@@ -23,7 +23,7 @@ BEGIN {
         p_ln_no = ln_no
         rc = getline
     }
-    if (p_ln_no != 0) {
+    if (rc != 0 && p_ln_no != 0) {
         if (ln_no == p_ln_no) {
             printf("%6s", c_ln_no)
         }

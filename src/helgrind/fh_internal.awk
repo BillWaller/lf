@@ -8,9 +8,14 @@ BEGIN {
     t_errors = 0
     rc = getline
     while (rc) {
-        if ($1 != "read" && $1 != "write") {
+        read = " "
+        write = " "
+        if ($1 == "read")
+            read = r
+        else if ($1 == "write")
+            write = w
+        else
             break
-        }
         a_verb = $1
         a_size = $2
         a_addr = $3
@@ -47,8 +52,8 @@ BEGIN {
             c_errors = $1
             c_context = $5
             if (c_errors != "") {
-                printf("%05s %6s %-6s %4s %8s %7s %-30s %3s %5s\n", c_context, c_errors, a_verb, a_size, a_addr, a_by_addr, a_fn, a_thrd, a_ln)
-                printf("%05s %6s %-6s %4s %8s %7s %-30s %3s %5s\n", c_context, c_errors, b_verb, a_size, a_addr, b_by_addr, b_fn, b_thrd, b_ln)
+                printf("%s%s %05s %6s %-6s %4s %8s %7s %-30s %3s %5s\n", read, write, c_context, c_errors, a_verb, a_size, a_addr, a_by_addr, a_fn, a_thrd, a_ln)
+                printf("%s%s %05s %6s %-6s %4s %8s %7s %-30s %3s %5s\n", read, write, c_context, c_errors, b_verb, a_size, a_addr, b_by_addr, b_fn, b_thrd, b_ln)
                 t_errors+= c_errors
             }
         }

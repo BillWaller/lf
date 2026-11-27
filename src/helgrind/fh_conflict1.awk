@@ -11,6 +11,13 @@ BEGIN {
         if ($1 != "read" && $1 != "write") {
             break
         }
+        a_action = " "
+        if ($1 == "read")
+            a_action = "r"
+        else {
+            if ($1 == "write")
+                a_action = "w"
+        } 
         a_verb = $1
         a_size = $2
         a_addr = $3
@@ -26,6 +33,13 @@ BEGIN {
         if (rc != 0 && $1 != "read" && $1 != "write") {
             break
         }
+        b_action = " "
+        if ($1 == "read")
+            b_action = "r"
+        else {
+            if ($1 == "write")
+                b_action = "w"
+        } 
         b_verb = $1
         b_size = $2
         b_addr = a_addr
@@ -47,8 +61,8 @@ BEGIN {
             c_errors = $1
             c_context = $5
             if (c_errors != "") {
-                printf("%5s %5s\n", a_ln, b_ln)
-                printf("%5s %5s\n", b_ln, a_ln)
+                printf("%5s%1s %5s%1s\n", a_ln, a_action, b_ln, b_action)
+                printf("%5s%1s %5s%1s\n", b_ln, b_action, a_ln, a_action)
             }
         }
         rc = getline

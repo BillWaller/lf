@@ -877,7 +877,6 @@ bool global_arena_create(GlobalContext *__G) {
         return false;
     }
     __G->queue = (QueueNode *)__G->arena;
-
     for (size_t i = 0; i < QUEUE_NODES; i++) {
         atomic_init(&__G->ring[i].sequence, i);
         __G->queue[i].next_free = (uint32_t)(i + 1);
@@ -900,7 +899,7 @@ bool global_arena_create(GlobalContext *__G) {
    establish the starting point for traversal.
    */
 void push_root_node(GlobalContext *__G, dev_t dev, ino_t ino) {
-    node_alloc(__G);
+    uint32_t root_idx = node_alloc(__G);
     QueueNode root_node = {
         .parent_idx = NO_PARENT,
         .child_dirs_remaining = 1,
@@ -911,7 +910,7 @@ void push_root_node(GlobalContext *__G, dev_t dev, ino_t ino) {
     };
     memcpy(root_node.name, __G->base_path, root_node.name_len);
     atomic_init(&__G->queue[0].child_dirs_remaining, 1);
-    __G->queue_idx = 0;
+    __G->queue_idx = root_idx;
     atomic_init(&__G->active_tasks, 1);
     mpmc_enqueue(__G, &root_node, __G->base_path, strlen(__G->base_path));
     return;
@@ -1065,30 +1064,20 @@ bool mpmc_bulk_enqueue(GlobalContext *__G, ThreadLocal *__tl) {
     if (count == 0) {
         return true;
     }
-
     uint32_t allocated_indices[STAGE_NODES];
-
     // 1. Allocate 'count' free QueueNodes and populate them before publishing
     for (uint32_t i = 0; i < count; i++) {
         uint32_t idx = node_alloc(__G);
         if (idx == INVALID_NODE) {
-            // Roll back any nodes allocated so far in this batch
-            for (uint32_t j = 0; j < i; j++) {
+            for (uint32_t j = 0; j < i; j++)
                 node_free(__G, allocated_indices[j]);
-            }
             return false;
         }
-
         allocated_indices[i] = idx;
-
-        // Copy staged metadata into the global QueueNode
         QueueNode *dst = &__G->queue[idx];
-        *dst = __tl->stage[i]; // FIX: Ensure that the entire QueueNode is
-        // copied, not just the pointer
-        //
-        atomic_init(&dst->child_dirs_remaining, 1); // 1 = directory itself is active
+        *dst = __tl->stage[i];
+        atomic_init(&__G->queue[idx].child_dirs_remaining, 1); // 1 = directory itself is active
     }
-
     // 2. Publish the allocated node indices into the MPMC ring buffer
     for (uint32_t i = 0; i < count; i++) {
         uint32_t pos = atomic_load_explicit(&__G->enqueue_pos, memory_order_relaxed);
@@ -1096,7 +1085,6 @@ bool mpmc_bulk_enqueue(GlobalContext *__G, ThreadLocal *__tl) {
             RingSlot *slot = &__G->ring[pos & QUEUE_MASK];
             uint32_t seq = atomic_load_explicit(&slot->sequence, memory_order_acquire);
             intptr_t diff = (intptr_t)seq - (intptr_t)pos;
-
             if (diff == 0) {
                 if (atomic_compare_exchange_weak_explicit(
                         &__G->enqueue_pos, &pos, pos + 1,
@@ -1127,6 +1115,7 @@ bool mpmc_dequeue(GlobalContext *__G, uint32_t *out_node_idx) {
 
     while (true) {
         if (atomic_load_explicit(&__G->shut_down, memory_order_acquire)) {
+            ANNOTATE_HAPPENS_AFTER(&__G->shut_down);
             return false;
         }
 
@@ -1139,8 +1128,11 @@ bool mpmc_dequeue(GlobalContext *__G, uint32_t *out_node_idx) {
                     &__G->dequeue_pos, &pos, pos + 1,
                     memory_order_acquire, memory_order_relaxed)) {
                 // Read the 32-bit node index and release the ring slot immediately
-                *out_node_idx = slot->node_idx;
-                atomic_store_explicit(&slot->sequence, pos + QUEUE_NODES, memory_order_release);
+                // *out_node_idx = slot->node_idx;
+                // atomic_store_explicit(&slot->sequence, pos + QUEUE_NODES,
+                // memory_order_release);
+                *out_node_idx = __G->ring[pos & QUEUE_MASK].node_idx;
+                atomic_store_explicit(&__G->ring[pos & QUEUE_MASK].sequence, pos + QUEUE_NODES, memory_order_release);
                 return true;
             }
             spin_count = 0;
@@ -1150,7 +1142,7 @@ bool mpmc_dequeue(GlobalContext *__G, uint32_t *out_node_idx) {
                 uint32_t check_seq = atomic_load_explicit(
                     &__G->ring[check_pos & QUEUE_MASK].sequence, memory_order_acquire);
                 if ((intptr_t)check_seq - (intptr_t)(check_pos + 1) < 0) {
-                    atomic_store_explicit(&__G->shut_down, 1, memory_order_release);
+                    atomic_exchange_explicit(&__G->shut_down, 1, memory_order_release);
                     return false;
                 }
             }
@@ -1248,7 +1240,7 @@ void *worker(void *arg) {
                    __G->queue[parent_idx].name_len);
             parent_idx = __G->queue[parent_idx].parent_idx;
         }
-#ifdef DEBUGY
+#ifdef DEBUGZ
         fprintf(stderr, "line: %d, %s, T%lu constructed path %s\n", __LINE__, __func__, __tl.thread_id, __tl.path);
 #endif
         __tl.parent_path_len = cum_path_len;
@@ -1267,19 +1259,17 @@ static inline void release_directory_chain(GlobalContext *__G, uint32_t q_pos) {
     while (curr != NO_PARENT) {
         // Atomically decrement and inspect the value BEFORE subtraction
         uint32_t prev = atomic_fetch_sub_explicit(
-            &__G->queue[curr & QUEUE_MASK].child_dirs_remaining,
+            &__G->queue[curr].child_dirs_remaining,
             1,
             memory_order_acq_rel);
         if (prev == 1) {
             // Count just hit 0: no children remain and this directory is finished.
             // Read parent_idx BEFORE releasing the slot to a producer!
-            uint32_t parent = __G->queue[curr & QUEUE_MASK].parent_idx;
-
+            uint32_t parent = __G->queue[curr].parent_idx;
+            node_free(__G, curr);
             // Publish slot as free for the next lap (curr + QUEUE_NODES)
-            atomic_store_explicit(
-                &__G->ring[curr & QUEUE_MASK].sequence,
-                curr + QUEUE_NODES,
-                memory_order_release);
+            // atomic_store_explicit(&__G->ring[curr].sequence, curr +
+            // QUEUE_NODES, memory_order_release);
             curr = parent; // Walk up to parent and decrement its child count
         } else {
             // Other children (or the directory's own scan) are still active

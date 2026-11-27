@@ -308,9 +308,9 @@ typedef enum {
 #define NO_PARENT UINT32_MAX
 typedef struct {
     uint32_t parent_idx;                                            //   4
+    uint32_t depth;                                                 //   4
     uint32_t next_free;                                             //   4
     alignas(CACHE_LINE_SIZE) _Atomic uint32_t child_dirs_remaining; //   4
-    uint32_t depth;                                                 //   4
     dev_t dev;                                                      //   8
     ino_t ino;                                                      //   8
     char name[NAME_MAX];                                            // 256
@@ -321,7 +321,7 @@ typedef union {
         uint32_t idx;
         uint32_t tag;
     };
-    uint64_t free_head;
+    uint64_t head;
 } FreeNode;
 typedef struct {
     _Atomic uint32_t sequence;

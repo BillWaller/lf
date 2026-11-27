@@ -2,37 +2,30 @@
 
 # lf
 
-Moore's Law has hit a wall, and the days of exponential CPU performance growth are over. Nevertheless, consumers still expect exponential improvements in performance with each new product generation. Will you be the developer who delivers the performance they want? In the past, you could depend on hardware improvements for big boosts in performance, but those days have ended. Don't worry, we have the solution.
+Moore's Law has hit a wall, and the days of exponential CPU performance growth are over. Nevertheless, consumers still expect performance improvements with each new product generation. Will you be the developer who delivers the performance they want? In the past, you could benefit from rapidly evolving hardware and capitalize on the illusion that your software was delivering the performance, but those days are rapidly coming to an end. You can still get massive performance gains, but consumer competition from Hyper-scale data centers has driven costs through the roof.
 
-Because the file finder is a core component of applications that deal with large numbers of files, and most do, even if your large file system application is blindingly fast, its performance is capped by the rate of file discovery and filtering by the finder.
+The truth is that most users don't care about the number of cores in the CPU, the clock speed, or the number of lines of code. What they care about is snap. They want responsiveness. Press the button. Get the answer immediately, like a light switch. Electricity travels at nearly the speed of light, right? So, why should it take a quarter of a second to find a file. The users are right.
 
-Users don't care about the number of cores in the CPU, the clock speed, or the number of lines of code. What they care about is snap. They want responsiveness. Press the button. Get the answer immediately, like a light switch. When your prospective clients compare your competitor's quarter to three quarter seconds latency to your product producing a half-million files in 70 milliseconds, they will naturally perceive you deliver more value. It's not about the time savings in a single operation, but the cumulative time of perhaps hundreds, thousands, or millions of operations over the course of a day, week, or month. lf is three to ten times faster than its mainstream competitors and it is the tool that will give your application the competitive edge.
+Over the past 30 years, developers have been more concerned with completing development projects on time and within budget than with performance. One prominent industry spokesman even said, "Don't waste time doing anything to make your code faster." And, he was right. Developers were using inherently low performance languages like Java, Python, and C# to build applications that were inherently slow, and that was appropriate for the time. The next generation of machines would fix it. Fast forward to 2026, and all that bloatware is taking a toll on overall system performance. That's why the big data centers, the people who really know the value of compute are using $10,000 GPUs and redesigning their applications in C and C++ to reclaim the value of their investment in hardware.
 
-With the current state of processor technology, the only dependable way to get more performance is to use more cores, and that means relying on multi-threaded code. That can be notoriously difficult, but lf takes care of it for you. lf is a multi-threaded file finder that takes advantage of all available CPU cores to provide lightning fast file discovery and filtering giving your application a real chance to deliver spectacular performance.
+It's not about the time savings in a single operation, but the cumulative time of perhaps hundreds, thousands, or millions of operations over the course of a day, week, or month. Because a file finder is a core component of applications that deal with large numbers of files, and most do, even if your large file system application is blindingly fast, its performance is be capped by the rate of file discovery and filtering by the finder. lf is three to ten times faster than its mainstream competitors and it is the tool that will give your application an astonishing competitive edge.
 
-lf is a high performance file finder that can be used to generate file lists for pick, shell pipelines, or custom scripts. lf is comparable to the popular find command, but it is designed to be more user-friendly and ridiculously fast.
+How do we do it? With the current state of processor technology, the only dependable way to get significant gains in performance is to use more cores, and that means the software has to be specifically designed to take advantage of multiple concurrent threads. That can be notoriously difficult, but lf takes care of it for you. lf is a multi-threaded file finder that leverages multi-core processors to provide lightning fast file discovery and filtering giving your application a real chance to deliver spectacular performance.
+
+lf is a high performance file finder that can be used to generate file lists for pick, shell pipelines, or custom scripts. lf is comparable to the popular find command, but unlike find, lf is extremely user-friendly and ridiculously fast.
 
 To say that lf is fast is understated. It is easily ten times faster than find, and, twice as fast as fd. lf handles huge directories with ease. It can be used to find files based on name, type, date, size, and other attributes, making it a powerful tool for file discovery and filtering. It also has an option that only reports cyclic and broken links.
 
 ![lf help Screenshot](graphics/lf.help.png)
 
-![lf3 logging](graphics/lf_log.png)
+## What Does lf Stand For?
 
-Above is a screenshot of an lf debugging log in view. Notice that it uses a "Coders Timestamp" instead of the usual ISO_8601 timestamp. The Coders Timestamp is a pair of 64-bit integers that represent the number of milliseconds, microseconds, and nanoseconds elapsed since the program was started as well as an interval timer to track time between log entries. It is used for high-resolution timing and logging in lf, and it provides a far more precise measure of time than the standard ISO_8601 format. Most importantly, it contains meaningful information for developers who are debugging and profiling the performance of lf.
-
-***NOTE:*** Each thread has it's own interval timer, so the Coders Timestamp is not a global timer. It is a per-thread timer that is used to track the time between log entries for each thread. This allows developers to see how long each thread is taking to execute, and to identify any threads that are taking longer than expected. The Coders Timestamp is a valuable tool for debugging and profiling the performance of lf, and it can help developers optimize their code for maximum performance.
-
-lf is already incredibly fast, but because a file finder is a core component of applications that deal with large numbers of files, it is reasonable that there will be developers who find ways to make it even faster. Hopefully they will make their improvements part of the lf project.
-
-lf is designed to be modular and extensible, so that it can be easily integrated into larger workflows and applications. It is also designed to be user-friendly, with a simple and intuitive interface that makes it easy to use for both novice and experienced users. We know you will be impressed with its speed, and we hope you will be just as impressed with its ease of use and flexibility. lf is a powerful tool for file discovery and filtering, and it is an essential component of the C-Menu toolkit.
+Some have suggested that lf stands for "lightweight finder", or "lightning fast file finder", while others have suggested that the name is derived from the "lock-free" structures that compose its memory model. The name is not an acronym, but rather a play on words. It is pronounced "el-eff", and it is a nod to the fact that lf is a file finder that is fast, efficient, and easy to use.
 
 ## File Finder Comparative Benchmark
 
 Below is the actual output of timings for find, fd, and lf on a directory with
 465,412 files. The directory is /home/bill, and it contains a mix of files and directories. The timings were done on a Linux system with a 16 x Intel® Xeon® E5-2670 @ 2.6GHz, 32GB of RAM, and an NVMe SSD.
-
-
-
 
 # File Finder Benchmarks - November 22, 2026
 
@@ -87,9 +80,61 @@ expected 465412 files, found 465412 files
 
 By default, fd ignores errors, while find and lf report errors to stderr so that they do not get mixed in with normal output on stdout. A permission denied error, for example,  means that the user running the command does not have permission to access the directory. This is helpful information for the user, as it indicates that there may be files in that directory that are not being counted.
 
+
+## Building lf
+
+---
+
+Initial build:
+
+Change to the source directory, lf/src, and:
+
+1. Generate the Build system inside the "build" folder.
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+```
+
+2. Compile the project
+
+```bash
+cmake --build build
+```
+
+3. Install the binaries (Default prefix is /usr/local)
+
+```bash
+sudo cmake --install build
+```
+
+---
+
+- To install lf in a custom path (the PREFIX variable from your Makefile), swap step 1 with:
+
+```bash
+    cmake -B build -DCMAKE_INSTALL_PREFIX=/your/custom/path \
+          -DCMAKE_BUILD_TYPE=Release
+```
+
+---
+
+## For Advanced Developers of lf
+
+- To build a Debug variant, toggle the build flag: 
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Debug
+```
+
+---
+
 ## lf Quality Assurance
 
-NOTE: lf has also been tested with -fsanitize=thread and -fsanitize=address, and no errors were found.
+If you want to contribute code to lf, you will need to certify that your patches
+have been applied to the appropriate lf branch, and that you have successfully
+tested the resulting code with valgrind and helgrind. This is to ensure that the code is free of memory leaks and race conditions, and that it meets the quality standards of the lf project.
+
+NOTE: You may also want to test your code with -fsanitize=thread and -fsanitize=address. The distribution releases of lf have been tested with -fsanitize=thread and -fsanitize=address and no errors were found.
 
 ### Helgrind output
 
@@ -129,50 +174,6 @@ NOTE: lf has also been tested with -fsanitize=thread and -fsanitize=address, and
 ==797634== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
 ```
 ---
-
-## Building lf
-
----
-
-Initial build:
-
-Change to the source directory, lf/src, and:
-
-1. Generate the Build system inside the "build" folder.
-
-```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-```
-
-2. Compile the project
-
-```bash
-cmake --build build
-```
-
-3. Install the binaries (Default prefix is /usr/local)
-
-```bash
-sudo cmake --install build
-```
-
----
-
-- To install lf in a custom path (the PREFIX variable from your Makefile), swap step 1 with:
-
-```bash
-    cmake -B build -DCMAKE_INSTALL_PREFIX=/your/custom/path \
-          -DCMAKE_BUILD_TYPE=Release
-```
-
----
-
-- To build a Debug variant, toggle the build flag: 
-
-```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Debug
-```
-
 ---
 
 Before running valgrind or helgrind, you must build the Debug variant of lf. This is because valgrind and helgrind require debug symbols to be present in the binary in order to provide meaningful output. If you try to run valgrind or helgrind on a Release build, you will get a lot of warnings and errors that are not relevant to your code.
@@ -191,7 +192,13 @@ cmake --build build --target valgrind
 cmake --build build --target helgrind
 ```
 
-After running helgrind, you will find helgrind.out in src/helgrind. Because the helgrind report is notoriously confusing and difficult to read, you can change to the src/helgrind directory and run the following command to get a more concise and readable report:
+After running helgrind, you will find the output in src/helgrind/helgrind.out.
+
+### Helgrind Condensed Format
+
+Because the helgrind report is notoriously verbose, circuitous, and difficult to read, we provide our Condensed Format Helgrind report with lf. The native Helgrind output used as input for the following Helgrind Condensed Format was 26 pages long. The Condensed Format is less than 3 pages, and includes a summary of errors, conflicts, and relevant code lines. It is convenient, concise, easy to read, and provides more information than native Helgrind. It's everything you need to and nothing you don't. You get a clear picture of what is going on in the code. Here's how to use it:
+
+After running "make helgrind", change to the src/helgrind directory and run the following command:
 
 ```bash
     ./fmt_helgrind.sh
@@ -199,116 +206,176 @@ After running helgrind, you will find helgrind.out in src/helgrind. Because the 
 
 This will create a file named helgrind_s1.out in the src/helgrind directory and make backup copies of lf.c and lf.h as lf_1.c and lf_1.h respectively. The numbers appended to the files increment sequentially for each iteration of fmt_helgrind.sh. This will be helpful in the event that your modifications have broken lf and you need to revert to a previous iteration.
 
+
 ```
 Helgrind, a thread error detector
 Copyright (C) 2007-2026, and GNU GPL'd, by OpenWorks LLP et al.
 Using Valgrind-3.29.0.GIT and LibVEX; rerun with -h for copyright info
-Command: ./lf -H
-2026-11-26T00:31:40Z Condensed Format by Bill Waller
+Command: ./lf4 -H
+2026-11-26T23:17:34Z Condensed Format by Bill Waller
+```
+
+```
+Helgrind Condensed Format - Errors by Context
 
 cntxt errors action size  at_addr by_addr fn                          thread  line
 ----- ------ ------ ---- -------- ------- ------------------------------ --- -----
-    1      1 read      4  4AB2140  40751F mpmc_dequeue                    12  1129
-    1        write                 407703 mpmc_dequeue                    16  1153
-    2      1 write     4  4AB2140  407703 mpmc_dequeue                    16  1153
-    2        read                  40751F mpmc_dequeue                     3  1129
-    3      1 read      4  56BD900  407C98 release_directory_chain          3  1276
-    3        write                 407214 mpmc_bulk_enqueue                5  1086
-    4      1 read      1  56BD95A  407AB7 worker                           3  1233
-    4        write                 407227 mpmc_bulk_enqueue                5  1086
-    5      2 read      2  56BD4DC  407AB7 worker                          16  1233
-    5        write                 407227 mpmc_bulk_enqueue                2  1086
-    6      2 read      4  56BD340  407C68 release_directory_chain          5  1269
-    6        write                 407227 mpmc_bulk_enqueue                2  1086
-    7      2 read      2  56BD4DC  407B95 worker                          16  1246
-    7        write                 407227 mpmc_bulk_enqueue                2  1086
-    8      2 read      4  56BD4C0  408962 flush_stage_buffer              16  1507
-    8        write                 407227 mpmc_bulk_enqueue                2  1086
-    9      3 read      4  56BD4C4  408385 finder                          16  1402
-    9        write                 407227 mpmc_bulk_enqueue                2  1086
-   10      3 read      1  56BD958  407AB7 worker                           3  1233
-   10        write                 407227 mpmc_bulk_enqueue                5  1086
-   11      3 read      4  56BD300  4079A6 worker                           5  1219
-   11        write                 407214 mpmc_bulk_enqueue                2  1086
-   12      3 read      2  56BD458  40794C worker                           5  1214
-   12        write                 40729E mpmc_bulk_enqueue                2  1086
-   13      3 write     4  4AB2310  40761E mpmc_dequeue                     5  1143
-   13        write                 407431 mpmc_bulk_enqueue                2  1105
-   14      3 read      4  4AB2314  4075E9 mpmc_dequeue                     5  1142
-   14        write                 407407 mpmc_bulk_enqueue                2  1104
-   15      4 read      4  4AB2310  40756E mpmc_dequeue                     5  1134
-   15        write                 407431 mpmc_bulk_enqueue                2  1105
-   16      4 read      4  56BD480  4079F8 worker                          16  1222
-   16        write                 407214 mpmc_bulk_enqueue                2  1086
-   17      4 read      2  56BD5D8  4079C8 worker                          16  1221
-   17        write                 40729E mpmc_bulk_enqueue                2  1086
-   18      4 write     4  4AB2308  407431 mpmc_bulk_enqueue                2  1105
-   18        read                  40756E mpmc_dequeue                    16  1134
-   19      5 read      2  56BD358  407AB7 worker                           5  1233
-   19        write                 407227 mpmc_bulk_enqueue                2  1086
-   20      8 write     4  4AB2328  407CD0 release_directory_chain          5  1279
-   20        read                  40756E mpmc_dequeue                    13  1134
-   21     14 read      2  56BD4D8  407B95 worker                          16  1246
-   21        write                 407227 mpmc_bulk_enqueue                2  1086
+    1      1 read      4  56BD600  407D76 release_directory_chain          4  1268
+    1        write                 40721E mpmc_bulk_enqueue                8  1078
+    2      1 read      1  56BD65A  407BA4 worker                           4  1225
+    2        write                 407231 mpmc_bulk_enqueue                8  1078
+    3      1 read      4  56BD300  407AE5 worker                           4  1214
+    3        write                 40721E mpmc_bulk_enqueue                2  1078
+    4      1 read      2  56BD458  407AB5 worker                           4  1213
+    4        write                 4072A8 mpmc_bulk_enqueue                2  1078
+    5      2 read      2  56BD4DC  407BA4 worker                          15  1225
+    5        write                 407231 mpmc_bulk_enqueue                2  1078
+    6      2 read      4  56BD600  407D76 release_directory_chain          4  1268
+    6        write                 40721E mpmc_bulk_enqueue                8  1078
+    7      2 read      4  56BD640  407D4E release_directory_chain          4  1261
+    7        write                 407231 mpmc_bulk_enqueue                8  1078
+    8      2 write     8  56BD190  40721E mpmc_bulk_enqueue               15  1078
+    8        write                 40721E mpmc_bulk_enqueue                8  1078
+    9      2 read      4  56BD188  406D54 node_alloc                       8   995
+    9        write                 406E15 node_free                        2  1011
+   10      2 read      2  56BD358  407C82 worker                           4  1238
+   10        write                 407231 mpmc_bulk_enqueue                2  1078
+   11      3 read      4  56BD304  40843B finder                           8  1392
+   11        write                 40721E mpmc_bulk_enqueue                2  1078
+   12      3 write     4  56BD188  406E15 node_free                        8  1011
+   12        write                 406E15 node_free                        2  1011
+   13      3 write     8  56BD1C8  407231 mpmc_bulk_enqueue               15  1078
+   13        write                 407231 mpmc_bulk_enqueue                8  1078
+   14      3 write     4  56BD1C0  407231 mpmc_bulk_enqueue                8  1078
+   14        read                  407D4E release_directory_chain          2  1261
+   15      3 read      1  56BD658  407BA4 worker                           4  1225
+   15        write                 407231 mpmc_bulk_enqueue                8  1078
+   16      3 read      4  56BD300  407A93 worker                           8  1211
+   16        write                 40721E mpmc_bulk_enqueue                2  1078
+   17      3 read      2  56BD458  407A39 worker                           8  1206
+   17        write                 4072A8 mpmc_bulk_enqueue                2  1078
+   18      3 write     4  4AB2310  407705 mpmc_dequeue                     8  1135
+   18        write                 407453 mpmc_bulk_enqueue                2  1093
+   19      3 read      4  4AB2314  4076B0 mpmc_dequeue                     8  1134
+   19        write                 407429 mpmc_bulk_enqueue                2  1092
+   20      4 read      4  4AB2310  40761F mpmc_dequeue                     8  1123
+   20        write                 407453 mpmc_bulk_enqueue                2  1093
+   21      4 write     4  4AB2308  407453 mpmc_bulk_enqueue                2  1093
+   21        read                  40761F mpmc_dequeue                    16  1123
+   22      4 write     8  56BD2E0  4072B8 mpmc_bulk_enqueue               15  1078
+   22        write                 4072B8 mpmc_bulk_enqueue                8  1078
+   23      4 write     8  56BD2C0  4072A8 mpmc_bulk_enqueue               15  1078
+   23        write                 4072A8 mpmc_bulk_enqueue                8  1078
+   24      4 write     8  56BD2A0  407298 mpmc_bulk_enqueue               15  1078
+   24        write                 407298 mpmc_bulk_enqueue                8  1078
+   25      4 write     8  56BD280  407288 mpmc_bulk_enqueue               15  1078
+   25        write                 407288 mpmc_bulk_enqueue                8  1078
+   26      4 write     8  56BD260  407278 mpmc_bulk_enqueue               15  1078
+   26        write                 407278 mpmc_bulk_enqueue                8  1078
+   27      4 write     8  56BD240  407268 mpmc_bulk_enqueue               15  1078
+   27        write                 407268 mpmc_bulk_enqueue                8  1078
+   28      4 write     8  56BD220  407258 mpmc_bulk_enqueue               15  1078
+   28        write                 407258 mpmc_bulk_enqueue                8  1078
+   29      4 write     8  56BD200  407248 mpmc_bulk_enqueue               15  1078
+   29        write                 407248 mpmc_bulk_enqueue                8  1078
+   30      4 write     8  56BD1E0  40723B mpmc_bulk_enqueue               15  1078
+   30        write                 40723B mpmc_bulk_enqueue                8  1078
+   31      4 write     8  56BD1A0  407227 mpmc_bulk_enqueue               15  1078
+   31        write                 407227 mpmc_bulk_enqueue                8  1078
+   32      6 read      2  56BD358  407BA4 worker                           8  1225
+   32        write                 407231 mpmc_bulk_enqueue                2  1078
       ------
-          73 total errors
-
-line_no  errors Conflicts
--------  ------ -------------------------------------------------
-   1086      49   1214  1219  1221  1222  1233  1246  1269  1276  1402  1507
-   1104       3   1142
-   1105      11   1134  1143
-   1129       2   1153
-   1134      16   1105  1279
-   1142       3   1104
-   1143       3   1105
-   1153       2   1129
-   1214       3   1086
-   1219       3   1086
-   1221       4   1086
-   1222       4   1086
-   1233      11   1086
-   1246      16   1086
-   1269       2   1086
-   1276       1   1086
-   1279       8   1134
-   1402       3   1086
-   1507       2   1086  1086
-         ------ 
-total       146 (2 x 73) 
+          97 total errors
 ```
-```c
-Relevant source code from lf.c
 
-  1086	        *dst = __tl->stage[i]; // FIX: Ensure that the entire QueueNode is
-  1104	                    slot->node_idx = allocated_indices[i];
-  1105	                    atomic_store_explicit(&slot->sequence, pos + 1, memory_order_release);
-  1129	        if (atomic_load_explicit(&__G->shut_down, memory_order_acquire)) {
-  1130	            return false;
-  1134	        uint32_t seq = atomic_load_explicit(&slot->sequence, memory_order_acquire);
-  1142	                *out_node_idx = slot->node_idx;
-  1143	                atomic_store_explicit(&slot->sequence, pos + QUEUE_NODES, memory_order_release);
-  1153	                    atomic_store_explicit(&__G->shut_down, 1, memory_order_release);
-  1214	        uint32_t q_path_len = __G->queue[q_pos].name_len;
-  1219	        uint32_t parent_idx = __G->queue[q_pos].parent_idx;
-  1221	            cum_path_len += __G->queue[parent_idx].name_len + 1;
-  1222	            parent_idx = __G->queue[parent_idx].parent_idx;
-  1233	        memcpy(&__tl.path[write_cursor],
-  1234	               &__G->queue[q_pos].name, __G->queue[q_pos].name_len);
-  1246	            memcpy(&__tl.path[write_cursor],
-  1247	                   &__G->queue[parent_idx].name,
-  1248	                   __G->queue[parent_idx].name_len);
-  1269	        uint32_t prev = atomic_fetch_sub_explicit(
-  1270	            &__G->queue[curr & QUEUE_MASK].child_dirs_remaining,
-  1271	            1,
-  1272	            memory_order_acq_rel);
-  1276	            uint32_t parent = __G->queue[curr & QUEUE_MASK].parent_idx;
-  1279	            atomic_store_explicit(
-  1280	                &__G->ring[curr & QUEUE_MASK].sequence,
-  1281	                curr + QUEUE_NODES,
-  1282	                memory_order_release);
-  1402	                __tl->depth = __G->queue[__tl->queue_idx].depth + 1;
-  1507	    atomic_fetch_add_explicit(&__G->queue[__tl->queue_idx].child_dirs_remaining, __tl->stage_idx, memory_order_relaxed);
+```
+Helgrind Condensed Format - Line Number Cross Reference
+
+line_no errors Conflicts
+------- ------ -------------------------------------------------
+   995r      2  1011w
+  1011w      8  1011w  995r
+  1078w    123  1078w 1206r 1211r 1213r 1214r 1225r 1238r 1261r 1268r 1392r
+  1092w      3  1134r
+  1093w     11  1123r 1135w
+  1123r      8  1093w
+  1134r      3  1092w
+  1135w      3  1093w
+  1206r      3  1078w
+  1211r      3  1078w
+  1213r      1  1078w
+  1214r      1  1078w
+  1225r     12  1078w
+  1238r      2  1078w
+  1261r      5  1078w
+  1268r      3  1078w
+  1392r      3  1078w
+        ------ 
+total      194 (2 x 97) 
+```
+
+```c
+Helgrind Condensed Format - Relevant Code Listing
+
+   >>> __G->queue[idx].next_free
+
+       static inline uint32_t node_alloc(GlobalContext *__G) {
+   995	        uint32_t next = __G->queue[idx].next_free;
+
+       static inline void node_free(GlobalContext *__G, uint32_t idx) {
+  1011	        __G->queue[idx].next_free = (uint32_t)head;
+```
+
+```c
+
+   >>>  __G->queue[pos & QUEUE_MASK]
+
+       bool mpmc_bulk_enqueue(GlobalContext *__G, ThreadLocal *__tl) {
+  1078	        *dst = __tl->stage[i];
+
+       void *worker(void *arg) {
+  1206	        uint32_t q_path_len = __G->queue[q_pos].name_len;
+  1211	        uint32_t parent_idx = __G->queue[q_pos].parent_idx;
+  1213	            cum_path_len += __G->queue[parent_idx].name_len + 1;
+  1214	            parent_idx = __G->queue[parent_idx].parent_idx;
+  1225	        memcpy(&__tl.path[write_cursor],
+  1226	               &__G->queue[q_pos].name, __G->queue[q_pos].name_len);
+  1238	            memcpy(&__tl.path[write_cursor],
+  1239	                   &__G->queue[parent_idx].name,
+  1240	                   __G->queue[parent_idx].name_len);
+  1261	        uint32_t prev = atomic_fetch_sub_explicit(
+  1262	            &__G->queue[curr].child_dirs_remaining,
+  1263	            1,
+  1264	            memory_order_acq_rel);
+  1268	            uint32_t parent = __G->queue[curr].parent_idx;
+
+       void *finder(GlobalContext *__G, ThreadLocal *__tl) {
+  1392	                __tl->depth = __G->queue[__tl->queue_idx].depth + 1;
+```
+
+```c
+
+   >>>  slot->node_idx
+   >>>  __G->ring[pos & QUEUE_MASK].node_idx
+
+       bool mpmc_bulk_enqueue(GlobalContext *__G, ThreadLocal *__tl) {
+  1092	                    slot->node_idx = allocated_indices[i];
+
+       bool mpmc_dequeue(GlobalContext *__G, uint32_t *out_node_idx) {
+  1134	                *out_node_idx = __G->ring[pos & QUEUE_MASK].node_idx;allocated_indices
+```
+
+```c
+
+   >>> slot->sequence
+   >>> __G->ring[pos & QUEUE_MASK].sequence
+
+       bool mpmc_bulk_enqueue(GlobalContext *__G, ThreadLocal *__tl) {
+  1093	                    atomic_store_explicit(&slot->sequence, pos + 1, memory_order_release);
+ 
+       bool mpmc_dequeue(GlobalContext *__G, uint32_t *out_node_idx) {
+  1123	        uint32_t seq = atomic_load_explicit(&slot->sequence, memory_order_acquire);
+  1135	                atomic_store_explicit(&__G->ring[pos & QUEUE_MASK].sequence, pos + QUEUE_NODES, memory_order_release);
 ```
 
 Of course, we wouldn't distribute lf with helgrind or valgrind errors. Here's
@@ -332,7 +399,15 @@ total         0 (2 x 0)
 ---
 ```
 
-###
+### Logging
+
+![lf3 logging](graphics/lf_log.png)
+
+Above is a screenshot of an lf debugging log in view. Notice that it uses a "Coders Timestamp" instead of the usual ISO_8601 timestamp. The Coders Timestamp is a pair of 64-bit integers that represent the number of milliseconds, microseconds, and nanoseconds elapsed since the program was started as well as an interval timer to track time between log entries. It is used for high-resolution timing and logging in lf, and it provides a far more precise measure of time than the standard ISO_8601 format. Most importantly, it contains meaningful information for developers who are debugging and profiling the performance of lf.
+
+***NOTE:*** Each thread has it's own interval timer, so the Coders Timestamp is not a global timer. It is a per-thread timer that is used to track the time between log entries for each thread. This allows developers to see how long each thread is taking to execute, and to identify any threads that are taking longer than expected. The Coders Timestamp is a valuable tool for debugging and profiling the performance of lf, and it can help developers optimize their code for maximum performance.
+
+### Build Shortcuts
 
 Note: You can build lf with a simple compile command such as:
 
