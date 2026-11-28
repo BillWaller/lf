@@ -117,10 +117,12 @@ static inline void futex_wait_epoch(GlobalContext *__G, uint32_t expected_epoch)
 }
 
 static inline void futex_wake_workers(GlobalContext *__G, int count) {
+    ANNOTATE_HAPPENS_BEFORE(&__G->work_epoch);
     atomic_fetch_add_explicit(&__G->work_epoch, 1, memory_order_release);
-    if (atomic_load_explicit(&__G->waiting_workers, memory_order_acquire) > 0) {
+    uint32_t waiting_workers = atomic_load_explicit(&__G->waiting_workers, memory_order_acquire);
+    ANNOTATE_HAPPENS_AFTER(&__G->waiting_workers);
+    if (waiting_workers > 0)
         syscall(SYS_futex, &__G->work_epoch, FUTEX_WAKE_PRIVATE, count, NULL, NULL, 0);
-    }
 }
 
 unsigned char const lf_type_mask[15] = {
@@ -991,6 +993,7 @@ bool append_output_buffer(GlobalContext *__G, ThreadLocal *__tl, const char *pat
 // ----------------------------------------------------------------------
 static inline uint32_t node_alloc(GlobalContext *__G) {
     uint64_t head = atomic_load_explicit(&__G->free_head, memory_order_acquire);
+    ANNOTATE_HAPPENS_AFTER(&__G->free_head);
     while (true) {
         uint32_t idx = (uint32_t)head;
         if (idx == INVALID_NODE) {
@@ -999,11 +1002,12 @@ static inline uint32_t node_alloc(GlobalContext *__G) {
         uint32_t next = atomic_load_explicit(&__G->queue[idx].next_free, memory_order_relaxed);
         uint64_t tag = (head >> 32) + 1;
         uint64_t new_head = (tag << 32) | next;
-        if (atomic_compare_exchange_weak_explicit(
-                &__G->free_head, &head, new_head,
-                memory_order_acquire, memory_order_relaxed)) {
+        uint32_t free_head = atomic_compare_exchange_weak_explicit(
+            &__G->free_head, &head, new_head,
+            memory_order_acquire, memory_order_relaxed);
+        ANNOTATE_HAPPENS_AFTER(&__G->free_head);
+        if (free_head)
             return idx;
-        }
 #if defined(__x86_64__)
         __builtin_ia32_pause();
 #endif
@@ -1012,9 +1016,11 @@ static inline uint32_t node_alloc(GlobalContext *__G) {
 static inline void node_free(GlobalContext *__G, uint32_t idx) {
     uint64_t head = atomic_load_explicit(&__G->free_head, memory_order_relaxed);
     while (true) {
+        ANNOTATE_HAPPENS_BEFORE(&__G->queue[idx].next_free);
         atomic_store_explicit(&__G->queue[idx].next_free, (uint32_t)head, memory_order_release);
         uint64_t tag = (head >> 32) + 1;
         uint64_t new_head = (tag << 32) | idx;
+        ANNOTATE_HAPPENS_BEFORE(&__G->free_head);
         if (atomic_compare_exchange_weak_explicit(
                 &__G->free_head, &head, new_head,
                 memory_order_release, memory_order_relaxed)) {
@@ -1032,11 +1038,12 @@ bool mpmc_enqueue(GlobalContext *__G, QueueNode *node, const char *path, size_t 
     while (true) {
         uint32_t seq = atomic_load_explicit(&__G->ring[pos & QUEUE_MASK].sequence,
                                             memory_order_acquire);
+        ANNOTATE_HAPPENS_AFTER(&__G->ring[pos & QUEUE_MASK].sequence);
         intptr_t diff = (intptr_t)seq - (intptr_t)pos;
         if (diff == 0) { // Success
-            if (atomic_compare_exchange_weak_explicit(&__G->enqueue_pos, &pos,
-                                                      pos + 1, memory_order_acquire,
-                                                      memory_order_relaxed))
+            uint32_t x_pos = atomic_compare_exchange_weak_explicit(&__G->enqueue_pos, &pos, pos + 1, memory_order_acquire, memory_order_relaxed);
+            ANNOTATE_HAPPENS_AFTER(&__G->enqueue_pos);
+            if (x_pos)
                 break;
         } else if (diff < 0) { // Queue full
             // fprintf(stderr, "line: %d Insufficient contiguous nodes:
@@ -1058,6 +1065,7 @@ bool mpmc_enqueue(GlobalContext *__G, QueueNode *node, const char *path, size_t 
     }
     __G->queue[pos] = *node;
     memcpy(&__G->queue[pos].name, path, len);
+    ANNOTATE_HAPPENS_BEFORE(&__G->ring[pos].sequence);
     atomic_store_explicit(&__G->ring[pos].sequence,
                           pos + 1, memory_order_release);
     atomic_thread_fence(memory_order_release);
@@ -1084,7 +1092,6 @@ bool mpmc_bulk_enqueue(GlobalContext *__G, ThreadLocal *__tl) {
         __G->queue[idx].ino = __tl->stage[i].ino;
         __G->queue[idx].name_len = __tl->stage[i].name_len;
         memcpy(__G->queue[idx].name, __tl->stage[i].name, __tl->stage[i].name_len + 1);
-        atomic_store_explicit(&__G->queue[idx].child_dirs_remaining, 1, memory_order_relaxed);
         atomic_init(&__G->queue[idx].child_dirs_remaining, 1); // 1 = directory itself is active
     }
     // 2. Publish the allocated node indices into the MPMC ring buffer
@@ -1093,12 +1100,14 @@ bool mpmc_bulk_enqueue(GlobalContext *__G, ThreadLocal *__tl) {
         while (true) {
             RingSlot *slot = &__G->ring[pos & QUEUE_MASK];
             uint32_t seq = atomic_load_explicit(&slot->sequence, memory_order_acquire);
+            ANNOTATE_HAPPENS_AFTER(&slot->sequence);
             intptr_t diff = (intptr_t)seq - (intptr_t)pos;
             if (diff == 0) {
                 if (atomic_compare_exchange_weak_explicit(
                         &__G->enqueue_pos, &pos, pos + 1,
                         memory_order_relaxed, memory_order_relaxed)) {
                     slot->node_idx = allocated_indices[i];
+                    ANNOTATE_HAPPENS_BEFORE(&slot->sequence);
                     atomic_store_explicit(&slot->sequence, pos + 1, memory_order_release);
                     break;
                 }
@@ -1123,36 +1132,44 @@ bool mpmc_dequeue(GlobalContext *__G, uint32_t *out_node_idx) {
     int spin_count = 0;
 
     while (true) {
-        if (atomic_load_explicit(&__G->shut_down, memory_order_acquire)) {
-            ANNOTATE_HAPPENS_AFTER(&__G->shut_down);
+        uint32_t shut_down = atomic_load_explicit(&__G->shut_down, memory_order_acquire);
+        ANNOTATE_HAPPENS_AFTER(&__G->shut_down);
+        if (shut_down)
             return false;
-        }
 
         RingSlot *slot = &__G->ring[pos & QUEUE_MASK];
         uint32_t seq = atomic_load_explicit(&slot->sequence, memory_order_acquire);
+        ANNOTATE_HAPPENS_AFTER(&slot->sequence);
         intptr_t diff = (intptr_t)seq - (intptr_t)(pos + 1);
 
         if (diff == 0) {
-            if (atomic_compare_exchange_weak_explicit(
-                    &__G->dequeue_pos, &pos, pos + 1,
-                    memory_order_acquire, memory_order_relaxed)) {
-                // Read the 32-bit node index and release the ring slot immediately
+            uint32_t x_pos = atomic_compare_exchange_weak_explicit(&__G->dequeue_pos, &pos, pos + 1, memory_order_acquire, memory_order_relaxed);
+            ANNOTATE_HAPPENS_AFTER(&__G->dequeue_pos);
+            if (x_pos) {
+                // Read the 32-bit node index and release the ring slot
+                // immediately
                 // *out_node_idx = slot->node_idx;
                 // atomic_store_explicit(&slot->sequence, pos + QUEUE_NODES,
                 // memory_order_release);
                 *out_node_idx = __G->ring[pos & QUEUE_MASK].node_idx;
+                ANNOTATE_HAPPENS_BEFORE(&__G->ring[pos & QUEUE_MASK].sequence);
                 atomic_store_explicit(&__G->ring[pos & QUEUE_MASK].sequence, pos + QUEUE_NODES, memory_order_release);
                 futex_wake_workers(__G, INT32_MAX);
                 return true;
             }
             spin_count = 0;
         } else if (diff < 0) {
-            if (atomic_load_explicit(&__G->active_tasks, memory_order_acquire) == 0) {
+            uint32_t active_tasks = atomic_load_explicit(&__G->active_tasks, memory_order_acquire);
+            ANNOTATE_HAPPENS_AFTER(&__G->active_tasks);
+            if (active_tasks == 0) {
                 uint32_t check_pos = atomic_load_explicit(&__G->dequeue_pos, memory_order_acquire);
+                ANNOTATE_HAPPENS_AFTER(&__G->dequeue_pos);
                 uint32_t check_seq = atomic_load_explicit(
                     &__G->ring[check_pos & QUEUE_MASK].sequence, memory_order_acquire);
+                ANNOTATE_HAPPENS_AFTER(&__G->ring[check_pos & QUEUE_MASK].sequence);
                 if ((intptr_t)check_seq - (intptr_t)(check_pos + 1) < 0) {
                     atomic_exchange_explicit(&__G->shut_down, 1, memory_order_release);
+                    ANNOTATE_HAPPENS_AFTER(&__G->shut_down);
                     return false;
                 }
             }
@@ -1163,21 +1180,25 @@ bool mpmc_dequeue(GlobalContext *__G, uint32_t *out_node_idx) {
 #endif
             } else {
                 uint32_t epoch = atomic_load_explicit(&__G->work_epoch, memory_order_acquire);
+                ANNOTATE_HAPPENS_AFTER(&__G->work_epoch);
                 atomic_fetch_add_explicit(&__G->waiting_workers, 1, memory_order_acq_rel);
-
-                // Re-check shutdown and active_tasks AFTER incrementing waiting_workers
+                // Re-check shutdown and active_tasks AFTER incrementing
+                // waiting_workers
                 // to prevent a lost-wakeup deadlock!
-                if (!atomic_load_explicit(&__G->shut_down, memory_order_acquire) &&
-                    atomic_load_explicit(&__G->active_tasks, memory_order_acquire) > 0) {
+                shut_down = atomic_load_explicit(&__G->shut_down, memory_order_acquire);
+                ANNOTATE_HAPPENS_AFTER(&__G->shut_down);
+                active_tasks = atomic_load_explicit(&__G->active_tasks, memory_order_acquire);
+                ANNOTATE_HAPPENS_AFTER(&__G->active_tasks);
+                if (!shut_down && active_tasks > 0)
                     futex_wait_epoch(__G, epoch);
-                }
-
                 atomic_fetch_sub_explicit(&__G->waiting_workers, 1, memory_order_relaxed);
                 spin_count = 0;
             }
             pos = atomic_load_explicit(&__G->dequeue_pos, memory_order_acquire);
+            ANNOTATE_HAPPENS_AFTER(&__G->dequeue_pos);
         } else {
             pos = atomic_load_explicit(&__G->dequeue_pos, memory_order_acquire);
+            ANNOTATE_HAPPENS_AFTER(&__G->dequeue_pos);
         }
     }
 }
@@ -1270,6 +1291,7 @@ void *worker(void *arg) {
         finder(__G, &__tl);
         release_directory_chain(__G, q_pos);
         if (atomic_fetch_sub_explicit(&__G->active_tasks, 1, memory_order_acq_rel) == 1) {
+            ANNOTATE_HAPPENS_BEFORE(&__G->shut_down);
             atomic_store_explicit(&__G->shut_down, 1, memory_order_release);
             futex_wake_workers(__G, INT32_MAX);
         }
